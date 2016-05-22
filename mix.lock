@@ -1,0 +1,2 @@
+%{"connection": {:hex, :connection, "1.0.2", "f4a06dd3ecae4141aa66f94ce92ea4c4b8753069472814932f1cadbc3078ab80", [:mix], []},
+  "redix": {:git, "https://github.com/whatyouhide/redix.git", "0a543a5fc2ddcc0ec9304c289477a6359759014c", []}}
