@@ -16,6 +16,8 @@ defmodule RedixPubsub.Mixfile do
 
   defp deps() do
     [{:connection, "~> 1.0"},
-     {:redix, github: "whatyouhide/redix"}]
+     {:redix, github: "whatyouhide/redix"},
+     {:earmark, ">= 0.0.0", only: :docs},
+     {:ex_doc, ">= 0.0.0", only: :docs}]
   end
 end
