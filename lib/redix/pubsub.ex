@@ -53,7 +53,7 @@ defmodule Redix.PubSub do
   ## Message format
 
   Most of the communication with a PubSub connection is done via (Elixir)
-  messages: the recipients of these messages will be the processes specified at
+  messages: the subscribers of these messages will be the processes specified at
   subscription time (in `Redix.PubSub.subscribe/3` or `Redix.PubSub.psubscribe/3`).
   All `Redix.PubSub` messages have the same form: they're a four-element tuple
   that looks like this:
@@ -140,7 +140,7 @@ defmodule Redix.PubSub do
 
   """
 
-  @type pubsub_recipient :: pid | port | atom | {atom, node}
+  @type subscriber :: pid | port | atom | {atom, node}
 
   alias Redix.Utils
 
@@ -261,7 +261,7 @@ defmodule Redix.PubSub do
   end
 
   @doc """
-  Closes the connection to Redis `conn`.
+  Stops the given PubSub process.
 
   This function is asynchronous (*fire and forget*): it returns `:ok` as soon as
   it's called and performs the closing of the connection after that.
@@ -278,106 +278,116 @@ defmodule Redix.PubSub do
   end
 
   @doc """
-  Subscribes `recipient` to the given channel or list of channels.
+  Subscribes `subscriber` to the given channel or list of channels.
 
-  Subscribes `recipient` (which can be anything that can be passed to `send/2`)
-  to `channels`, which can be a single channel as well as a list of channels.
+  Subscribes `subscriber` (which can be anything that can be passed to `send/2`)
+  to `channels`, which can be a single channel or a list of channels.
 
-  For each of the channels in `channels` which `recipient` successfully
-  subscribes to, a message will be sent to `recipient` with this form:
+  For each of the channels in `channels` which `subscriber` successfully
+  subscribes to, a message will be sent to `subscriber` with this form:
 
-      {:redix_pubsub, :subscribe, channel, nil}
+      {:redix_pubsub, pid, :subscribed, %{to: channel}}
+
+  See the documentation for `Redix.PubSub` for more information about the format
+  of messages.
 
   ## Examples
 
-      iex> Redix.subscribe(conn, ["foo", "bar", "baz"], self())
+      iex> Redix.subscribe(conn, ["foo", "bar"], self())
       :ok
       iex> flush()
-      {:redix_pubsub, :subscribe, "foo", nil}
-      {:redix_pubsub, :subscribe, "bar", nil}
-      {:redix_pubsub, :subscribe, "baz", nil}
+      {:redix_pubsub, #PID<...>, :subscribed, %{to: "foo"}}
+      {:redix_pubsub, #PID<...>, :subscribed, %{to: "bar"}}
       :ok
 
   """
-  @spec subscribe(GenServer.server, String.t | [String.t], pubsub_recipient) :: :ok
-  def subscribe(conn, channels, recipient) do
-    Connection.cast(conn, {:subscribe, List.wrap(channels), recipient})
+  @spec subscribe(GenServer.server, String.t | [String.t], subscriber) :: :ok
+  def subscribe(conn, channels, subscriber) do
+    Connection.cast(conn, {:subscribe, List.wrap(channels), subscriber})
   end
 
   @doc """
-  Subscribes `recipient` to the given pattern or list of patterns.
+  Subscribes `subscriber` to the given pattern or list of patterns.
 
-  Works like `subscribe/3` but subscribing `recipient` to a pattern (or list of
+  Works like `subscribe/3` but subscribing `subscriber` to a pattern (or list of
   patterns) instead of regular channels.
 
   Upon successful subscription to each of the `patterns`, a message will be sent
-  to `recipient` with the following form:
+  to `subscriber` with the following form:
 
-     {:redix_pubsub, :psubscribe, pattern, nil}
+      {:redix_pubsub, pid, :psubscribed, %{to: pattern}}
+
+  See the documentation for `Redix.PubSub` for more information about the format
+  of messages.
 
   ## Examples
 
       iex> Redix.psubscribe(conn, "ba*", self())
       :ok
       iex> flush()
-      {:redix_pubsub, :psubscribe, "ba*", nil}
+      {:redix_pubsub, #PID<...>, :psubscribe, %{to: "ba*"}}
       :ok
 
   """
-  @spec psubscribe(GenServer.server, String.t | [String.t], pubsub_recipient) :: :ok
-  def psubscribe(conn, patterns, recipient) do
-    Connection.cast(conn, {:psubscribe, List.wrap(patterns), recipient})
+  @spec psubscribe(GenServer.server, String.t | [String.t], subscriber) :: :ok
+  def psubscribe(conn, patterns, subscriber) do
+    Connection.cast(conn, {:psubscribe, List.wrap(patterns), subscriber})
   end
 
   @doc """
-  Unsubscribes `recipient` from the given channel or list of channels.
+  Unsubscribes `subscriber` from the given channel or list of channels.
 
   This function basically "undoes" what `subscribe/3` does: it unsubscribes
-  `recipient` from the given channel or list of channels.
+  `subscriber` from the given channel or list of channels.
 
   Upon successful unsubscription from each of the `channels`, a message will be
-  sent to `recipient` with the following form:
+  sent to `subscriber` with the following form:
 
-      {:redix_pubsub, :unsubscribe, channel, nil}
+      {:redix_pubsub, pid, :unsubscribed, %{from: channel}}
+
+  See the documentation for `Redix.PubSub` for more information about the format
+  of messages.
 
   ## Examples
 
-      iex> Redix.unsubscribe(conn, ["foo", "bar", "baz"], self())
+      iex> Redix.unsubscribe(conn, ["foo", "bar"], self())
       :ok
       iex> flush()
-      {:redix_pubsub, :unsubscribe, "foo", nil}
-      {:redix_pubsub, :unsubscribe, "bar", nil}
-      {:redix_pubsub, :unsubscribe, "baz", nil}
+      {:redix_pubsub, #PID<...>, :unsubscribed, %{from: "foo"}}
+      {:redix_pubsub, #PID<...>, :unsubscribed, %{from: "bar"}}
       :ok
 
   """
-  @spec unsubscribe(GenServer.server, String.t | [String.t], pubsub_recipient) :: :ok
-  def unsubscribe(conn, channels, recipient) do
-    Connection.cast(conn, {:unsubscribe, List.wrap(channels), recipient})
+  @spec unsubscribe(GenServer.server, String.t | [String.t], subscriber) :: :ok
+  def unsubscribe(conn, channels, subscriber) do
+    Connection.cast(conn, {:unsubscribe, List.wrap(channels), subscriber})
   end
 
   @doc """
-  Unsubscribes `recipient` from the given pattern or list of patterns.
+  Unsubscribes `subscriber` from the given pattern or list of patterns.
 
   This function basically "undoes" what `psubscribe/3` does: it unsubscribes
-  `recipient` from the given channel or list of channels.
+  `subscriber` from the given pattern or list of patterns.
 
   Upon successful unsubscription from each of the `patterns`, a message will be
-  sent to `recipient` with the following form:
+  sent to `subscriber` with the following form:
 
-      {:redix_pubsub, :punsubscribe, pattern, nil}
+      {:redix_pubsub, pid, :punsubscribed, %{to: pattern}}
+
+  See the documentation for `Redix.PubSub` for more information about the format
+  of messages.
 
   ## Examples
 
       iex> Redix.punsubscribe(conn, "foo_*", self())
       :ok
       iex> flush()
-      {:redix_pubsub, :punsubscribe, "foo_*", nil}
+      {:redix_pubsub, #PID<...>, :punsubscribed, %{from: "foo_*"}}
       :ok
 
   """
-  @spec punsubscribe(GenServer.server, String.t | [String.t], pubsub_recipient) :: :ok
-  def punsubscribe(conn, patterns, recipient) do
-    Connection.cast(conn, {:punsubscribe, List.wrap(patterns), recipient})
+  @spec punsubscribe(GenServer.server, String.t | [String.t], subscriber) :: :ok
+  def punsubscribe(conn, patterns, subscriber) do
+    Connection.cast(conn, {:punsubscribe, List.wrap(patterns), subscriber})
   end
 end
