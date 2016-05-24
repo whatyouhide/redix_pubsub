@@ -1,20 +1,71 @@
-# RedixPubsub
+# Redix PubSub
 
-**TODO: Add description**
+> Elixir library for Redis Pub/Sub (based on [Redix][redix])
 
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed as:
+Add the `:redix_pubsub` dependency to your `mix.exs` file:
 
-  1. Add redix_pubsub to your list of dependencies in `mix.exs`:
+```elixir
+defp deps() do
+  [{:redix_pubsub, ">= 0.0.0"}]
+end
+```
 
-        def deps do
-          [{:redix_pubsub, "~> 0.0.1"}]
-        end
+and add `:redix_pubsub` to your list of applications:
 
-  2. Ensure redix_pubsub is started before your application:
+```elixir
+defp application() do
+  [applications: [:logger, :redix_pubsub]]
+end
+```
 
-        def application do
-          [applications: [:redix_pubsub]]
-        end
+Then, run `mix deps.get` in your shell to fetch the new dependency.
 
+## Usage
+
+Each `Redix.PubSub` process is able to subcribe to/unsubscribe from multiple
+Redis channels, and is able to handle multiple Elixir processes subscribing each
+to different channels.
+
+A `Redix.PubSub` process can be started via `Redix.PubSub.start_link/2`:
+
+```elixir
+{:ok, pubsub} = Redix.PubSub.start_link()
+```
+
+This process will hold a single TCP connection to Redis. All other communication
+happens via Elixir messages (that simulate a Pub/Sub interaction with the
+`Redix.PubSub` process). Subscribing (to channels and patterns) as well as
+unsubscribing work as *fire-and-forget* operations (casts in `GenServer`-speak)
+that always return `:ok`: the subscription/unsubscription confirmation comes as
+an Elixir message.
+
+```elixir
+{:ok, pubsub} = Redix.PubSub.start_link()
+
+Redix.PubSub.subscribe(pubsub, "my_channel", self())
+#=> :ok
+
+# Now, messages will be sent to the current process. Let's wait for the
+# subscription confirmation:
+receive do
+  {:redix_pubsub, ^pubsub, :subscribed, %{to: "my_channel"}} -> :ok
+end
+
+# Now, someone publishes "hello" on "my_channel":
+receive do
+  {:redix_pubsub, ^pubsub, :message, %{channel: "my_channel", payload: "hello"}} ->
+    IO.puts "Received a message!"
+end
+```
+
+More information on usage of this library can be found in the [documentation][docs].
+
+## License
+
+ISC 2016, Andrea Leopardi (see [LICENSE.txt](LICENSE.txt))
+
+
+[docs]: http://hexdocs.pm/redix_pubsub
+[redix]: https://github.com/whatyouhide/redix
