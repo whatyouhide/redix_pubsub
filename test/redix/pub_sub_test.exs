@@ -15,8 +15,8 @@ defmodule Redix.PubSubTest do
 
     # First, we subscribe.
     assert :ok = PubSub.subscribe(ps, ["foo", "bar"], self())
-    assert_receive {:redix_pubsub, ^ps, :subscribed, %{to: "foo"}}
-    assert_receive {:redix_pubsub, ^ps, :subscribed, %{to: "bar"}}
+    assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}
+    assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "bar"}}
 
     # Then, we test messages are routed correctly.
     Redix.command!(c, ~w(PUBLISH foo hello))
@@ -26,7 +26,7 @@ defmodule Redix.PubSubTest do
 
     # Then, we unsubscribe.
     assert :ok = PubSub.unsubscribe(ps, ["foo"], self())
-    assert_receive {:redix_pubsub, ^ps, :unsubscribed, %{from: "foo"}}
+    assert_receive {:redix_pubsub, ^ps, :unsubscribed, %{channel: "foo"}}
 
     # And finally, we test that we don't receive messages anymore for
     # unsubscribed channels, but we do for subscribed channels.
@@ -40,8 +40,8 @@ defmodule Redix.PubSubTest do
     {:ok, c} = Redix.start_link
 
     PubSub.psubscribe(ps, ["foo*", "ba?"], self())
-    assert_receive {:redix_pubsub, ^ps, :psubscribed, %{to: "foo*"}}
-    assert_receive {:redix_pubsub, ^ps, :psubscribed, %{to: "ba?"}}
+    assert_receive {:redix_pubsub, ^ps, :psubscribed, %{pattern: "foo*"}}
+    assert_receive {:redix_pubsub, ^ps, :psubscribed, %{pattern: "ba?"}}
 
     Redix.pipeline!(c, [
       ~w(PUBLISH foo_1 foo_1),
@@ -56,7 +56,7 @@ defmodule Redix.PubSubTest do
     refute_receive {:redix_pubsub, ^ps, :pmessage, %{payload: "barfoo"}}
 
     PubSub.punsubscribe(ps, "foo*", self())
-    assert_receive {:redix_pubsub, ^ps, :punsubscribed, %{from: "foo*"}}
+    assert_receive {:redix_pubsub, ^ps, :punsubscribed, %{pattern: "foo*"}}
 
     Redix.pipeline!(c, [~w(PUBLISH foo_x foo_x), ~w(PUBLISH baz baz)])
 
@@ -69,8 +69,8 @@ defmodule Redix.PubSubTest do
 
     assert :ok = PubSub.subscribe(ps, "foo", self())
     assert :ok = PubSub.subscribe(ps, "foo", self())
-    assert_receive {:redix_pubsub, ^ps, :subscribed, %{to: "foo"}}
-    assert_receive {:redix_pubsub, ^ps, :subscribed, %{to: "foo"}}
+    assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}
+    assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}
 
     Redix.command!(c, ~w(PUBLISH foo hello))
 
@@ -97,8 +97,8 @@ defmodule Redix.PubSubTest do
 
     # Now let's unsubscribe just one pid from that channel.
     PubSub.unsubscribe(ps, "foo", self())
-    assert_receive {:redix_pubsub, ^ps, :unsubscribed, %{from: "foo"}}
-    refute_receive {^mirror, {:redix_pubsub, ^ps, :unsubscribed, %{from: "foo"}}}
+    assert_receive {:redix_pubsub, ^ps, :unsubscribed, %{channel: "foo"}}
+    refute_receive {^mirror, {:redix_pubsub, ^ps, :unsubscribed, %{channel: "foo"}}}
 
     # Publishing now should send a message to the non-unsubscribed pid.
     Redix.command!(c, ~w(PUBLISH foo hello))
@@ -111,7 +111,7 @@ defmodule Redix.PubSubTest do
     pid = spawn(fn -> message_mirror(parent) end)
 
     assert :ok = PubSub.subscribe(ps, "foo", pid)
-    assert_receive {^pid, {:redix_pubsub, ^ps, :subscribed, %{to: "foo"}}}
+    assert_receive {^pid, {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}}
 
     # Let's just ensure no errors happen when we kill the recipient.
     Process.exit(pid, :kill)
@@ -121,14 +121,14 @@ defmodule Redix.PubSubTest do
 
   test "disconnections/reconnections", %{conn: ps} do
     assert :ok = PubSub.subscribe(ps, "foo", self())
-    assert_receive {:redix_pubsub, ^ps, :subscribed, %{to: "foo"}}
+    assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}
 
     {:ok, c} = Redix.start_link
 
     silence_log fn ->
       Redix.command!(c, ~w(CLIENT KILL TYPE pubsub))
       assert_receive {:redix_pubsub, ^ps, :disconnected, %{reason: _reason}}
-      assert_receive {:redix_pubsub, ^ps, :subscribed, %{to: "foo"}}, 1000
+      assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}, 1000
     end
 
     Redix.command!(c, ~w(PUBLISH foo hello))

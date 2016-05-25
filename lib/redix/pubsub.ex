@@ -29,7 +29,7 @@ defmodule Redix.PubSub do
       Redix.PubSub.subscribe(pubsub, "my_channel", self())
       #=> :ok
       receive do msg -> msg end
-      #=> {:redix_pubsub, #PID<...>, :subscribed, %{to: "my_channel"}}
+      #=> {:redix_pubsub, #PID<...>, :subscribed, %{channel: "my_channel"}}
 
   After a subscription, messages published to a channel are delivered to all
   Elixir processes subscribed to that channel via `Redix.PubSub`:
@@ -81,14 +81,16 @@ defmodule Redix.PubSub do
       disconnection and reconnection). One `:subscribe`/`:psubscribe` message is
       received for every channel a process subscribed
       to. `:subscribe`/`:psubscribe` messages have the following properties:
-        * `:to` - the channel/pattern the process has been subscribed to
+        * `:channel` or `:pattern` - the channel/pattern the process has been
+          subscribed to
     * `:unsubscribe` or `:punsubscribe` messages - they're sent as confirmation
       of unsubscription to a channel or pattern (respectively) (via
       `Redix.PubSub.unsubscribe/3` or `Redix.PubSub.punsubscribe/3`). One
       `:unsubscribe`/`:punsubscribe` message is received for every channel a
       process unsubscribes from. `:unsubscribe`/`:punsubscribe` messages have
       the following properties:
-        * `:from` - the channel/pattern the process has unsubscribed from
+        * `:channel` or `:pattern` - the channel/pattern the process has
+          unsubscribed from
     * `:message` messages - they're sent to subscribers to a given channel when
       a message is published on that channel. `:message` messages have the
       following properties:
@@ -119,7 +121,7 @@ defmodule Redix.PubSub do
 
       # We wait for the subscription confirmation
       receive do
-        {:redix_pubsub, ^pubsub, :subscribed, %{to: "my_channel"}} -> :ok
+        {:redix_pubsub, ^pubsub, :subscribed, %{channel: "my_channel"}} -> :ok
       end
 
       Redix.command!(client, ~w(PUBLISH my_channel hello)
@@ -286,7 +288,7 @@ defmodule Redix.PubSub do
   For each of the channels in `channels` which `subscriber` successfully
   subscribes to, a message will be sent to `subscriber` with this form:
 
-      {:redix_pubsub, pid, :subscribed, %{to: channel}}
+      {:redix_pubsub, pid, :subscribed, %{channel: channel}}
 
   See the documentation for `Redix.PubSub` for more information about the format
   of messages.
@@ -296,8 +298,8 @@ defmodule Redix.PubSub do
       iex> Redix.subscribe(conn, ["foo", "bar"], self())
       :ok
       iex> flush()
-      {:redix_pubsub, #PID<...>, :subscribed, %{to: "foo"}}
-      {:redix_pubsub, #PID<...>, :subscribed, %{to: "bar"}}
+      {:redix_pubsub, #PID<...>, :subscribed, %{channel: "foo"}}
+      {:redix_pubsub, #PID<...>, :subscribed, %{channel: "bar"}}
       :ok
 
   """
@@ -315,7 +317,7 @@ defmodule Redix.PubSub do
   Upon successful subscription to each of the `patterns`, a message will be sent
   to `subscriber` with the following form:
 
-      {:redix_pubsub, pid, :psubscribed, %{to: pattern}}
+      {:redix_pubsub, pid, :psubscribed, %{pattern: pattern}}
 
   See the documentation for `Redix.PubSub` for more information about the format
   of messages.
@@ -325,7 +327,7 @@ defmodule Redix.PubSub do
       iex> Redix.psubscribe(conn, "ba*", self())
       :ok
       iex> flush()
-      {:redix_pubsub, #PID<...>, :psubscribe, %{to: "ba*"}}
+      {:redix_pubsub, #PID<...>, :psubscribe, %{pattern: "ba*"}}
       :ok
 
   """
@@ -343,7 +345,7 @@ defmodule Redix.PubSub do
   Upon successful unsubscription from each of the `channels`, a message will be
   sent to `subscriber` with the following form:
 
-      {:redix_pubsub, pid, :unsubscribed, %{from: channel}}
+      {:redix_pubsub, pid, :unsubscribed, %{channel: channel}}
 
   See the documentation for `Redix.PubSub` for more information about the format
   of messages.
@@ -353,8 +355,8 @@ defmodule Redix.PubSub do
       iex> Redix.unsubscribe(conn, ["foo", "bar"], self())
       :ok
       iex> flush()
-      {:redix_pubsub, #PID<...>, :unsubscribed, %{from: "foo"}}
-      {:redix_pubsub, #PID<...>, :unsubscribed, %{from: "bar"}}
+      {:redix_pubsub, #PID<...>, :unsubscribed, %{channel: "foo"}}
+      {:redix_pubsub, #PID<...>, :unsubscribed, %{channel: "bar"}}
       :ok
 
   """
@@ -372,7 +374,7 @@ defmodule Redix.PubSub do
   Upon successful unsubscription from each of the `patterns`, a message will be
   sent to `subscriber` with the following form:
 
-      {:redix_pubsub, pid, :punsubscribed, %{to: pattern}}
+      {:redix_pubsub, pid, :punsubscribed, %{pattern: pattern}}
 
   See the documentation for `Redix.PubSub` for more information about the format
   of messages.
@@ -382,7 +384,7 @@ defmodule Redix.PubSub do
       iex> Redix.punsubscribe(conn, "foo_*", self())
       :ok
       iex> flush()
-      {:redix_pubsub, #PID<...>, :punsubscribed, %{from: "foo_*"}}
+      {:redix_pubsub, #PID<...>, :punsubscribed, %{pattern: "foo_*"}}
       :ok
 
   """

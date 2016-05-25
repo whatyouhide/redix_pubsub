@@ -50,7 +50,7 @@ Redix.PubSub.subscribe(pubsub, "my_channel", self())
 # Now, messages will be sent to the current process. Let's wait for the
 # subscription confirmation:
 receive do
-  {:redix_pubsub, ^pubsub, :subscribed, %{to: "my_channel"}} -> :ok
+  {:redix_pubsub, ^pubsub, :subscribed, %{channel: "my_channel"}} -> :ok
 end
 
 # Now, someone publishes "hello" on "my_channel":

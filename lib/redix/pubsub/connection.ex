@@ -183,7 +183,7 @@ defmodule Redix.PubSub.Connection do
 
     {targets_to_subscribe_to, subscriptions} =
       Enum.flat_map_reduce(targets, subscriptions, fn(target, acc) ->
-        key = key_for_target(kind, target)
+        {target_type, _} = key = key_for_target(kind, target)
         {targets_to_subscribe_to, for_target} =
           if for_target = HashDict.get(acc, key) do
             {[], for_target}
@@ -192,7 +192,7 @@ defmodule Redix.PubSub.Connection do
           end
         for_target = put_new_lazy(for_target, subscriber, fn -> Process.monitor(subscriber) end)
         acc = HashDict.put(acc, key, for_target)
-        send(subscriber, message(msg_kind, %{to: target}))
+        send(subscriber, message(msg_kind, %{target_type => target}))
         {targets_to_subscribe_to, acc}
       end)
 
@@ -221,8 +221,9 @@ defmodule Redix.PubSub.Connection do
 
     {targets_to_unsubscribe_from, subscriptions} =
       Enum.flat_map_reduce(targets, subscriptions, fn(target, acc) ->
-        send(subscriber, message(msg_kind, %{from: target}))
-        if for_target = HashDict.get(acc, key_for_target(kind, target)) do
+        {target_type, _} = key = key_for_target(kind, target)
+        send(subscriber, message(msg_kind, %{target_type => target}))
+        if for_target = HashDict.get(acc, key) do
           case HashDict.pop(for_target, subscriber) do
             {ref, new_for_target} when is_reference(ref) ->
               Process.demonitor(ref)
@@ -329,7 +330,7 @@ defmodule Redix.PubSub.Connection do
         end
       subscribers
       |> HashDict.keys()
-      |> Enum.each(fn(pid) -> send(pid, message(msg_kind, %{to: target})) end)
+      |> Enum.each(fn(pid) -> send(pid, message(msg_kind, %{kind => target})) end)
     end)
 
     {channels, patterns} = Enum.partition(subscriptions, &match?({{:channel, _}, _}, &1))
