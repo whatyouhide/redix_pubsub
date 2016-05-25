@@ -308,8 +308,8 @@ defmodule Redix.PubSub.Connection do
   defp key_for_target(kind, target) when kind in [:psubscribe, :punsubscribe],
     do: {:pattern, target}
 
-  defp message(kind, meta) when is_atom(kind) and is_map(meta) do
-    {:redix_pubsub, self(), kind, meta}
+  defp message(kind, properties) when is_atom(kind) and is_map(properties) do
+    {:redix_pubsub, self(), kind, properties}
   end
 
   defp send_noreply_or_disconnect(%{socket: socket} = state, data) do

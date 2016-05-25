@@ -86,9 +86,9 @@ defmodule Redix.PubSubTest do
 
     # Let's subscribe two different pids to the same channel.
     assert :ok = PubSub.subscribe(ps, ["foo"], self())
-    assert_receive {:redix_pubsub, ^ps, :subscribed, _meta}
+    assert_receive {:redix_pubsub, ^ps, :subscribed, _properties}
     assert :ok = PubSub.subscribe(ps, ["foo"], mirror)
-    assert_receive {^mirror, {:redix_pubsub, ^ps, :subscribed, _meta}}
+    assert_receive {^mirror, {:redix_pubsub, ^ps, :subscribed, _properties}}
 
     # Let's ensure both those pids receive messages published on that channel.
     Redix.command!(c, ~w(PUBLISH foo hello))
