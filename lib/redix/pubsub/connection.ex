@@ -233,7 +233,8 @@ defmodule Redix.PubSub.Connection do
     {targets_to_unsubscribe_from, subscriptions} =
       Enum.flat_map_reduce(targets, subscriptions, fn(target, acc) ->
         {target_type, _} = key = key_for_target(kind, target)
-        send(subscriber, message(msg_kind, %{target_type => target}))
+        # TODO: replace Map.put/3 with map variables, see other TODOs.
+        send(subscriber, message(msg_kind, Map.put(%{}, target_type, target)))
         if for_target = HashDict.get(acc, key) do
           case HashDict.pop(for_target, subscriber) do
             {ref, new_for_target} when is_reference(ref) ->
