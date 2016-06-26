@@ -50,6 +50,10 @@ defmodule Redix.PubSub do
   `{:redix_pubsub, pid, :subscribed, _}` message, the same as when a client
   subscribes to a channel/pattern.
 
+  Note that if `exit_on_disconnection: true` is passed to
+  `Redix.PubSub.start_link/2`, the `Redix.PubSub` process will exit and not send
+  any `:disconnected` messages to subscribed clients.
+
   ## Message format
 
   Most of the communication with a PubSub connection is done via (Elixir)
@@ -228,6 +232,19 @@ defmodule Redix.PubSub do
       time interval used between reconnection attempts. See the ["Reconnections"
       page](http://hexdocs.pm/redix/reconnections.html) in the docs for `Redix`
       for more information.
+    * `:exit_on_disconnection` - (boolean) if `true`, the Redix server will exit
+      if it fails to connect or disconnects from Redis. Note that setting this
+      option to `true` means that the `:backoff_initial` and `:backoff_max` options
+      will be ignored. Defaults to `false`.
+    * `:log` - (keyword list) a keyword list of `{action, level}` where `level` is
+      the log level to use to log `action`. The possible actions and their default
+      values are:
+        * `:disconnection` (defaults to `:error`) - logged when the connection to
+          Redis is lost
+        * `:failed_connection` (defaults to `:error`) - logged when Redix can't
+          establish a connection to Redis
+        * `:reconnection` (defaults to `:info`) - logged when Redix manages to
+          reconnect to Redis after the connection was lost
 
   In addition to these options, all options accepted by
   `Connection.start_link/3` (and thus `GenServer.start_link/3`) are forwarded to

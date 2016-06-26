@@ -47,7 +47,7 @@ defmodule Redix.PubSub.Connection do
       {:ok, socket} ->
         state = %{state | socket: socket}
         if info == :backoff do
-          Logger.info ["Reconnected to Redis (", Utils.format_host(state), ?)]
+          log(state, :reconnection, ["Reconnected to Redis (", Utils.format_host(state), ?)])
           case resubscribe_after_reconnection(state) do
             :ok ->
               {:ok, state}
@@ -58,13 +58,18 @@ defmodule Redix.PubSub.Connection do
           {:ok, state}
         end
       {:error, reason} ->
-        Logger.error [
+        log state, :failed_connection, [
           "Failed to connect to Redis (", Utils.format_host(state), "): ",
-          Utils.format_error(reason),
+          Redix.format_error(reason),
         ]
 
         next_backoff = calc_next_backoff(state.backoff_current || state.opts[:backoff_initial], state.opts[:backoff_max])
-        {:backoff, next_backoff, %{state | backoff_current: next_backoff}}
+        if state.opts[:exit_on_disconnection] do
+          IO.puts "Dede"
+          {:stop, reason, state}
+        else
+          {:backoff, next_backoff, %{state | backoff_current: next_backoff}}
+        end
       {:stop, reason} ->
         {:stop, reason, state}
     end
@@ -77,18 +82,22 @@ defmodule Redix.PubSub.Connection do
   end
 
   def disconnect({:error, reason}, state) do
-    Logger.error [
-      "Disconnected from Redis (", Utils.format_host(state), "): ", Utils.format_error(reason),
+    log state, :disconnection, [
+      "Disconnected from Redis (", Utils.format_host(state), "): ", Redix.format_error(reason),
     ]
 
     :ok = :gen_tcp.close(state.socket)
 
-    for {_target, subscribers} <- state.subscriptions, {subscriber, _monitor} <- subscribers do
-      send(subscriber, message(:disconnected, %{reason: reason}))
-    end
+    if state.opts[:exit_on_disconnection] do
+      {:stop, reason, state}
+    else
+      for {_target, subscribers} <- state.subscriptions, {subscriber, _monitor} <- subscribers do
+        send(subscriber, message(:disconnected, %{reason: reason}))
+      end
 
-    state = %{state | socket: nil, continuation: nil, backoff_current: state.opts[:backoff_initial]}
-    {:backoff, state.opts[:backoff_initial], state}
+      state = %{state | socket: nil, continuation: nil, backoff_current: state.opts[:backoff_initial]}
+      {:backoff, state.opts[:backoff_initial], state}
+    end
   end
 
   def handle_cast({operation, targets, subscriber}, state) when operation in [:subscribe, :psubscribe] do
@@ -366,5 +375,13 @@ defmodule Redix.PubSub.Connection do
     after
       0 -> :ok
     end
+  end
+
+  defp log(state, action, message) do
+    level =
+      state.opts
+      |> Keyword.fetch!(:log)
+      |> Keyword.fetch!(action)
+    Logger.log(level, message)
   end
 end

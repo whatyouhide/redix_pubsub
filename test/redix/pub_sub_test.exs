@@ -135,6 +135,23 @@ defmodule Redix.PubSubTest do
     assert_receive {:redix_pubsub, ^ps, :message, %{channel: "foo", payload: "hello"}}
   end
 
+  test ":exit_on_disconnection option" do
+    {:ok, ps} = PubSub.start_link([], exit_on_disconnection: true)
+    {:ok, c} = Redix.start_link
+
+    # We need to subscribe to something so that this client becomes a PubSub
+    # client and we can kill it with "CLIENT KILL TYPE pubsub".
+    assert :ok = PubSub.subscribe(ps, "foo", self())
+    assert_receive {:redix_pubsub, ^ps, :subscribed, %{to: "foo"}}
+
+    Process.flag(:trap_exit, true)
+
+    silence_log fn ->
+      Redix.command!(c, ~w(CLIENT KILL TYPE pubsub))
+      assert_receive {:EXIT, ^ps, :tcp_closed}
+    end
+  end
+
   # This function just sends back to this process every message it receives.
   defp message_mirror(parent) do
     receive do
