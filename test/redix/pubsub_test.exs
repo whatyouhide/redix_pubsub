@@ -142,7 +142,7 @@ defmodule Redix.PubSubTest do
     # We need to subscribe to something so that this client becomes a PubSub
     # client and we can kill it with "CLIENT KILL TYPE pubsub".
     assert :ok = PubSub.subscribe(ps, "foo", self())
-    assert_receive {:redix_pubsub, ^ps, :subscribed, %{to: "foo"}}
+    assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}
 
     Process.flag(:trap_exit, true)
 
