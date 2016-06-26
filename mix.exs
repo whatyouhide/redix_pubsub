@@ -18,7 +18,7 @@ defmodule RedixPubsub.Mixfile do
      docs: [main: "Redix.PubSub",
             source_ref: "v#{@version}",
             source_url: "https://github.com/whatyouhide/redix_pubsub",
-            extras: "README.md"]]
+            extras: ["README.md"]]]
   end
 
   def application() do
