@@ -201,7 +201,9 @@ defmodule Redix.PubSub.Connection do
           end
         for_target = put_new_lazy(for_target, subscriber, fn -> Process.monitor(subscriber) end)
         acc = HashDict.put(acc, key, for_target)
-        send(subscriber, message(msg_kind, %{target_type => target}))
+        # TODO: replace Map.put/3 with %{target_type => target} when we can
+        # depend on Elixir ~> 1.2 (Erlang >= 18).
+        send(subscriber, message(msg_kind, Map.put(%{}, target_type, target)))
         {targets_to_subscribe_to, acc}
       end)
 
@@ -339,7 +341,9 @@ defmodule Redix.PubSub.Connection do
         end
       subscribers
       |> HashDict.keys()
-      |> Enum.each(fn(pid) -> send(pid, message(msg_kind, %{kind => target})) end)
+      # TODO: replace Map.put/3 with map variable when we can depend on Elixir
+      # ~> 1.2.
+      |> Enum.each(fn(pid) -> send(pid, message(msg_kind, Map.put(%{}, kind, target))) end)
     end)
 
     {channels, patterns} = Enum.partition(subscriptions, &match?({{:channel, _}, _}, &1))
