@@ -1,28 +1,19 @@
 language:
   elixir
 
-elixir:
-  - 1.0.5
-  - 1.1.1
-  - 1.2.6
-  - 1.3.0
-
-otp_release:
-  - 17.5
-  - 18.3
-  - 19.0
-
 matrix:
-  exclude:
-    - otp: 18.3
+  include:
+    - otp_release: 17.5
       elixir: 1.0.5
-    - otp: 19.0
-      elixir: 1.0.5
-    - otp: 19.0
+    - otp_release: 17.5
       elixir: 1.1.1
-    - otp: 17.5
+    - otp_release: 18.3
+      elixir: 1.1.1
+    - otp_release: 18.3
       elixir: 1.2.6
-    - otp: 17.5
+    - otp_release: 18.3
+      elixir: 1.3.0
+    - otp_release: 19.0
       elixir: 1.3.0
 
 services:
