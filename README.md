@@ -1,5 +1,7 @@
 # Redix PubSub
 
+[![Build Status](https://travis-ci.org/whatyouhide/redix_pubsub.svg?branch=master)](https://travis-ci.org/whatyouhide/redix_pubsub)
+
 > Elixir library for Redis Pub/Sub (based on [Redix][redix])
 
 ## Installation
