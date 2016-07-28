@@ -249,10 +249,10 @@ defmodule Redix.PubSub.Connection do
               acc = HashDict.put(acc, key_for_target(kind, target), new_for_target)
               {targets_to_unsubscribe_from, acc}
             {nil, _} ->
-              {[], state}
+              {[], acc}
           end
         else
-          {[], state}
+          {[], acc}
         end
       end)
 
