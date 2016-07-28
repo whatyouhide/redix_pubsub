@@ -23,9 +23,9 @@ defmodule Redix.PubSub.Connection do
 
     # A dictionary of `channel => recipient_pids` where `channel` is either
     # `{:channel, "foo"}` or `{:pattern, "foo*"}` and `recipient_pids` is an
-    # HashDict of pids of recipients to their monitor ref for that
+    # Map of pids of recipients to their monitor ref for that
     # channel/pattern.
-    subscriptions: HashDict.new,
+    subscriptions: Map.new,
   ]
 
   @backoff_exponent 1.5
@@ -130,13 +130,13 @@ defmodule Redix.PubSub.Connection do
     {targets_to_unsubscribe_from, subscriptions} =
       Enum.flat_map_reduce(subscriptions, subscriptions, fn({key, subscribers}, acc) ->
         subscribers =
-          case HashDict.pop(subscribers, pid) do
+          case Map.pop(subscribers, pid) do
             {^ref, new_subscribers} -> new_subscribers
             {_, subscribers} -> subscribers
           end
-        acc = HashDict.put(acc, key, subscribers)
-        if HashDict.size(subscribers) == 0 do
-          {[key], HashDict.delete(acc, key)}
+        acc = Map.put(acc, key, subscribers)
+        if Enum.count(subscribers) == 0 do
+          {[key], Map.delete(acc, key)}
         else
           {[], acc}
         end
@@ -194,13 +194,13 @@ defmodule Redix.PubSub.Connection do
       Enum.flat_map_reduce(targets, subscriptions, fn(target, acc) ->
         {target_type, _} = key = key_for_target(kind, target)
         {targets_to_subscribe_to, for_target} =
-          if for_target = HashDict.get(acc, key) do
+          if for_target = Map.get(acc, key) do
             {[], for_target}
           else
-            {[target], HashDict.new()}
+            {[target], Map.new()}
           end
         for_target = put_new_lazy(for_target, subscriber, fn -> Process.monitor(subscriber) end)
-        acc = HashDict.put(acc, key, for_target)
+        acc = Map.put(acc, key, for_target)
         # TODO: replace Map.put/3 with %{target_type => target} when we can
         # depend on Elixir ~> 1.2 (Erlang >= 18).
         send(subscriber, message(msg_kind, Map.put(%{}, target_type, target)))
@@ -235,18 +235,18 @@ defmodule Redix.PubSub.Connection do
         {target_type, _} = key = key_for_target(kind, target)
         # TODO: replace Map.put/3 with map variables, see other TODOs.
         send(subscriber, message(msg_kind, Map.put(%{}, target_type, target)))
-        if for_target = HashDict.get(acc, key) do
-          case HashDict.pop(for_target, subscriber) do
+        if for_target = Map.get(acc, key) do
+          case Map.pop(for_target, subscriber) do
             {ref, new_for_target} when is_reference(ref) ->
               Process.demonitor(ref)
               flush_monitor_messages(ref)
               targets_to_unsubscribe_from =
-                if HashDict.size(new_for_target) == 0 do
+                if Enum.count(new_for_target) == 0 do
                   [target]
                 else
                   []
                 end
-              acc = HashDict.put(acc, key_for_target(kind, target), new_for_target)
+              acc = Map.put(acc, key_for_target(kind, target), new_for_target)
               {targets_to_unsubscribe_from, acc}
             {nil, _} ->
               {[], state}
@@ -281,7 +281,7 @@ defmodule Redix.PubSub.Connection do
     message = message(:message, %{channel: channel, payload: payload})
 
     subscriptions
-    |> HashDict.fetch!({:channel, channel})
+    |> Map.fetch!({:channel, channel})
     |> Enum.each(fn({subscriber, _monitor}) -> send(subscriber, message) end)
 
     state
@@ -291,7 +291,7 @@ defmodule Redix.PubSub.Connection do
     message = message(:pmessage, %{channel: channel, pattern: pattern, payload: payload})
 
     subscriptions
-    |> HashDict.fetch!({:pattern, pattern})
+    |> Map.fetch!({:pattern, pattern})
     |> Enum.each(fn({subscriber, _monitor}) -> send(subscriber, message) end)
 
     state
@@ -307,11 +307,11 @@ defmodule Redix.PubSub.Connection do
     end
   end
 
-  defp put_new_lazy(hash_dict, key, fun) when is_function(fun, 0) do
-    if HashDict.has_key?(hash_dict, key) do
-      hash_dict
+  defp put_new_lazy(map, key, fun) when is_function(fun, 0) do
+    if Map.has_key?(map, key) do
+      map
     else
-      HashDict.put(hash_dict, key, fun.())
+      Map.put(map, key, fun.())
     end
   end
 
@@ -341,7 +341,7 @@ defmodule Redix.PubSub.Connection do
           :pattern -> :psubscribed
         end
       subscribers
-      |> HashDict.keys()
+      |> Map.keys()
       # TODO: replace Map.put/3 with map variable when we can depend on Elixir
       # ~> 1.2.
       |> Enum.each(fn(pid) -> send(pid, message(msg_kind, Map.put(%{}, kind, target))) end)
