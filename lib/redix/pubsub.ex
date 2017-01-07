@@ -150,8 +150,6 @@ defmodule Redix.PubSub do
 
   alias Redix.Utils
 
-  @default_timeout 5_000
-
   @doc """
   Starts a PubSub connection to Redis.
 
