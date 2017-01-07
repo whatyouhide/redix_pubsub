@@ -198,11 +198,9 @@ defmodule Redix.PubSub.Connection do
           else
             {[target], %{}}
           end
-        for_target = put_new_lazy(for_target, subscriber, fn -> Process.monitor(subscriber) end)
+        for_target = Map.put_new_lazy(for_target, subscriber, fn -> Process.monitor(subscriber) end)
         acc = Map.put(acc, key, for_target)
-        # TODO: replace Map.put/3 with %{target_type => target} when we can
-        # depend on Elixir ~> 1.2 (Erlang >= 18).
-        send(subscriber, message(msg_kind, Map.put(%{}, target_type, target)))
+        send(subscriber, message(msg_kind, %{target_type => target}))
         {targets_to_subscribe_to, acc}
       end)
 
@@ -232,8 +230,7 @@ defmodule Redix.PubSub.Connection do
     {targets_to_unsubscribe_from, subscriptions} =
       Enum.flat_map_reduce(targets, subscriptions, fn(target, acc) ->
         {target_type, _} = key = key_for_target(kind, target)
-        # TODO: replace Map.put/3 with map variables, see other TODOs.
-        send(subscriber, message(msg_kind, Map.put(%{}, target_type, target)))
+        send(subscriber, message(msg_kind, %{target_type => target}))
         if for_target = Map.get(acc, key) do
           case Map.pop(for_target, subscriber) do
             {ref, new_for_target} when is_reference(ref) ->
@@ -306,15 +303,6 @@ defmodule Redix.PubSub.Connection do
     end
   end
 
-  # TODO: remove when we depend on ~> 1.2.
-  defp put_new_lazy(hash_dict, key, fun) when is_function(fun, 0) do
-    if Map.has_key?(hash_dict, key) do
-      hash_dict
-    else
-      Map.put(hash_dict, key, fun.())
-    end
-  end
-
   defp key_for_target(kind, target) when kind in [:subscribe, :unsubscribe],
     do: {:channel, target}
   defp key_for_target(kind, target) when kind in [:psubscribe, :punsubscribe],
@@ -342,9 +330,7 @@ defmodule Redix.PubSub.Connection do
         end
       subscribers
       |> Map.keys()
-      # TODO: replace Map.put/3 with map variable when we can depend on Elixir
-      # ~> 1.2.
-      |> Enum.each(fn(pid) -> send(pid, message(msg_kind, Map.put(%{}, kind, target))) end)
+      |> Enum.each(fn(pid) -> send(pid, message(msg_kind, %{kind => target})) end)
     end)
 
     {channels, patterns} = Enum.partition(subscriptions, &match?({{:channel, _}, _}, &1))

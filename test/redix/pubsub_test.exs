@@ -1,7 +1,8 @@
 defmodule Redix.PubSubTest do
   use ExUnit.Case
 
-  import Redix.TestHelpers
+  import ExUnit.CaptureLog
+
   alias Redix.PubSub
 
   setup do
@@ -125,7 +126,7 @@ defmodule Redix.PubSubTest do
 
     {:ok, c} = Redix.start_link
 
-    silence_log fn ->
+    capture_log fn ->
       Redix.command!(c, ~w(CLIENT KILL TYPE pubsub))
       assert_receive {:redix_pubsub, ^ps, :disconnected, %{reason: _reason}}
       assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}, 1000
@@ -146,7 +147,7 @@ defmodule Redix.PubSubTest do
 
     Process.flag(:trap_exit, true)
 
-    silence_log fn ->
+    capture_log fn ->
       Redix.command!(c, ~w(CLIENT KILL TYPE pubsub))
       assert_receive {:EXIT, ^ps, :tcp_closed}
     end
