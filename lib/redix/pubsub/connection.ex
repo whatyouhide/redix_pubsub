@@ -306,6 +306,7 @@ defmodule Redix.PubSub.Connection do
     end
   end
 
+  # TODO: remove when we depend on ~> 1.2.
   defp put_new_lazy(hash_dict, key, fun) when is_function(fun, 0) do
     if HashDict.has_key?(hash_dict, key) do
       hash_dict
