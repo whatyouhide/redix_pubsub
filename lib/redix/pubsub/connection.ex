@@ -65,7 +65,6 @@ defmodule Redix.PubSub.Connection do
 
         next_backoff = calc_next_backoff(state.backoff_current || state.opts[:backoff_initial], state.opts[:backoff_max])
         if state.opts[:exit_on_disconnection] do
-          IO.puts "Dede"
           {:stop, reason, state}
         else
           {:backoff, next_backoff, %{state | backoff_current: next_backoff}}
