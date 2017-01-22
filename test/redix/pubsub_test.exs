@@ -107,6 +107,25 @@ defmodule Redix.PubSubTest do
     assert_receive {^mirror, {:redix_pubsub, ^ps, :message, %{payload: "hello"}}}
   end
 
+  test "after unsubscribing from a channel, resubscribing one recipient resubscribes correctly", %{conn: ps} do
+    {:ok, c} = Redix.start_link
+
+    PubSub.subscribe(ps, "my_channel", self())
+    assert_receive {:redix_pubsub, ^ps, :subscribed, _properties}
+
+    Redix.command!(c, ~w(PUBLISH my_channel hello))
+    assert_receive {:redix_pubsub, ^ps, :message, %{payload: "hello"}}
+
+    PubSub.unsubscribe(ps, "my_channel", self())
+    assert_receive {:redix_pubsub, ^ps, :unsubscribed, _properties}
+
+    PubSub.subscribe(ps, "my_channel", self())
+    assert_receive {:redix_pubsub, ^ps, :subscribed, _properties}
+
+    Redix.command!(c, ~w(PUBLISH my_channel hello))
+    assert_receive {:redix_pubsub, ^ps, :message, %{payload: "hello"}}
+  end
+
   test "recipients are monitored and the connection unsubcribes when they go down", %{conn: ps} do
     parent = self()
     pid = spawn(fn -> message_mirror(parent) end)

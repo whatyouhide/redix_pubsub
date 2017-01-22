@@ -193,10 +193,11 @@ defmodule Redix.PubSub.Connection do
       Enum.flat_map_reduce(targets, subscriptions, fn(target, acc) ->
         {target_type, _} = key = key_for_target(kind, target)
         {targets_to_subscribe_to, for_target} =
-          if for_target = Map.get(acc, key) do
-            {[], for_target}
-          else
-            {[target], %{}}
+          case Map.get(acc, key, %{}) do
+            for_target when map_size(for_target) == 0 ->
+              {[target], for_target}
+            for_target ->
+              {[], for_target}
           end
         for_target = Map.put_new_lazy(for_target, subscriber, fn -> Process.monitor(subscriber) end)
         acc = Map.put(acc, key, for_target)
