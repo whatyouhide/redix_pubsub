@@ -7,7 +7,6 @@ defmodule Redix.PubSubTest do
 
   setup do
     {:ok, ps} = PubSub.start_link
-    on_exit(fn -> PubSub.stop(ps) end)
     {:ok, %{conn: ps}}
   end
 

@@ -280,8 +280,10 @@ defmodule Redix.PubSub do
   @doc """
   Stops the given PubSub process.
 
-  This function is asynchronous (*fire and forget*): it returns `:ok` as soon as
-  it's called and performs the closing of the connection after that.
+  This function is synchronous and blocks until the given PubSub connection
+  frees all its resources and disconnects from the Redis server. `timeout` can
+  be passed to limit the amount of time allowed for the connection to exit; if
+  it doesn't exit in the given interval, this call exits.
 
   ## Examples
 
@@ -290,8 +292,8 @@ defmodule Redix.PubSub do
 
   """
   @spec stop(GenServer.server) :: :ok
-  def stop(conn) do
-    Connection.cast(conn, :stop)
+  def stop(conn, timeout \\ :infinity) do
+    GenServer.stop(conn, :normal, timeout)
   end
 
   @doc """

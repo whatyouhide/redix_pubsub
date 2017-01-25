@@ -74,12 +74,6 @@ defmodule Redix.PubSub.Connection do
     end
   end
 
-  def disconnect(:stop, state) do
-    # TODO: do stuff
-
-    {:stop, :normal, state}
-  end
-
   def disconnect({:error, reason}, state) do
     log state, :disconnection, [
       "Disconnected from Redis (", Utils.format_host(state), "): ", Redix.format_error(reason),
