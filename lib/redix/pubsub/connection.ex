@@ -43,7 +43,7 @@ defmodule Redix.PubSub.Connection do
   end
 
   def connect(info, state) do
-    case Utils.connect(state.opts) do
+    case establish_connection(state.opts) do
       {:ok, socket} ->
         state = %{state | socket: socket}
         if info == :backoff do
@@ -152,13 +152,20 @@ defmodule Redix.PubSub.Connection do
   ## Helper functions
 
   defp sync_connect(state) do
-    case Utils.connect(state.opts) do
+    case establish_connection(state.opts) do
       {:ok, socket} ->
         {:ok, %{state | socket: socket}}
       {:error, reason} ->
         {:stop, reason}
       {:stop, _reason} = stop ->
         stop
+    end
+  end
+
+  defp establish_connection(opts) do
+    with {:ok, socket} <- Utils.connect(opts),
+         :ok <- :inet.setopts(socket, active: :once) do
+      {:ok, socket}
     end
   end
 
