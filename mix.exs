@@ -28,7 +28,6 @@ defmodule RedixPubsub.Mixfile do
   defp deps() do
     [{:connection, "~> 1.0"},
      {:redix, "~> 0.5.2"},
-     {:earmark, ">= 0.0.0", only: :docs},
-     {:ex_doc, ">= 0.0.0", only: :docs}]
+     {:ex_doc, "~> 0.15", only: :dev}]
   end
 end
