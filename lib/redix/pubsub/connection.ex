@@ -86,7 +86,7 @@ defmodule Redix.PubSub.Connection do
       {:stop, reason, state}
     else
       for {_target, subscribers} <- state.subscriptions, {subscriber, _monitor} <- subscribers do
-        send(subscriber, message(:disconnected, %{reason: reason}))
+        send(subscriber, message(:disconnected, %{error: error}))
       end
 
       state = %{state | socket: nil, continuation: nil, backoff_current: state.opts[:backoff_initial]}

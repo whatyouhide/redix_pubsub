@@ -146,7 +146,7 @@ defmodule Redix.PubSubTest do
 
     capture_log fn ->
       Redix.command!(c, ~w(CLIENT KILL TYPE pubsub))
-      assert_receive {:redix_pubsub, ^ps, :disconnected, %{reason: _reason}}
+      assert_receive {:redix_pubsub, ^ps, :disconnected, %{error: %Redix.ConnectionError{}}}
       assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}, 1000
     end
 

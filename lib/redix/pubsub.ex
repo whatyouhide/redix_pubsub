@@ -109,7 +109,9 @@ defmodule Redix.PubSub do
     * `:disconnected` messages - they're sent to all subscribers to all
       channels/patterns when the connection to Redis is interrupted.
       `:disconnected` messages have the following properties:
-        * `:reason` - the reason for the disconnection (e.g., `:tcp_closed`)
+        * `:error` - the reason for the disconnection, a `Redix.ConnectionError`
+          exception struct (that can be raised or turned into a message through
+          `Exception.message/1`.
 
   ## Examples
 
