@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.0
+
+- Bump the Redix dependency to ~> v0.6.0, which changed connection errors from being any term to being `Redix.ConnectionError` exception structs.
+- Send `%{error: %Redix.ConnectionError{}}` metadata in the `:disconnected` message.
+
 ## v0.3.0
 
 - Bump the Redix dependency to ~> v0.5.2, which fixed some bugs.
