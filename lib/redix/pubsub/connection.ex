@@ -5,6 +5,7 @@ defmodule Redix.PubSub.Connection do
 
   alias Redix.Protocol
   alias Redix.Utils
+  alias Redix.ConnectionError
 
   require Logger
 
@@ -51,16 +52,16 @@ defmodule Redix.PubSub.Connection do
           case resubscribe_after_reconnection(state) do
             :ok ->
               {:ok, state}
-            {:error, _reason} = error ->
-              {:disconnect, error, state}
+            {:error, reason} ->
+              {:disconnect, {:error, %ConnectionError{reason: reason}}, state}
           end
         else
           {:ok, state}
         end
-      {:error, reason} ->
+      {:error, %ConnectionError{reason: reason} = error} ->
         log state, :failed_connection, [
           "Failed to connect to Redis (", Utils.format_host(state), "): ",
-          Redix.format_error(reason),
+          ConnectionError.message(error),
         ]
 
         next_backoff = calc_next_backoff(state.backoff_current || state.opts[:backoff_initial], state.opts[:backoff_max])
@@ -74,9 +75,9 @@ defmodule Redix.PubSub.Connection do
     end
   end
 
-  def disconnect({:error, reason}, state) do
+  def disconnect({:error, %ConnectionError{reason: reason} = error}, state) do
     log state, :disconnection, [
-      "Disconnected from Redis (", Utils.format_host(state), "): ", Redix.format_error(reason),
+      "Disconnected from Redis (", Utils.format_host(state), "): ", ConnectionError.message(error),
     ]
 
     :ok = :gen_tcp.close(state.socket)
@@ -112,11 +113,11 @@ defmodule Redix.PubSub.Connection do
   end
 
   def handle_info({:tcp_closed, socket}, %{socket: socket} = state) do
-    {:disconnect, {:error, :tcp_closed}, state}
+    {:disconnect, {:error, %ConnectionError{reason: :tcp_closed}}, state}
   end
 
   def handle_info({:tcp_error, socket, reason}, %{socket: socket} = state) do
-    {:disconnect, {:error, reason}, state}
+    {:disconnect, {:error, %ConnectionError{reason: reason}}, state}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, %{subscriptions: subscriptions} = state) do
@@ -318,8 +319,8 @@ defmodule Redix.PubSub.Connection do
     case :gen_tcp.send(socket, data) do
       :ok ->
         {:noreply, state}
-      {:error, _reason} = error ->
-        {:disconnect, error, state}
+      {:error, reason} ->
+        {:disconnect, {:error, %ConnectionError{reason: reason}}, state}
     end
   end
 
