@@ -58,8 +58,18 @@ defmodule Redix.PubSub.Connection do
         else
           {:ok, state}
         end
-      {:error, error} ->
-        handle_connection_error(state, error)
+      {:error, reason} ->
+        log state, :failed_connection, [
+          "Failed to connect to Redis (", Utils.format_host(state), "): ",
+          ConnectionError.format_reason(reason)
+        ]
+
+        next_backoff = calc_next_backoff(state.backoff_current || state.opts[:backoff_initial], state.opts[:backoff_max])
+        if state.opts[:exit_on_disconnection] do
+          {:stop, reason, state}
+        else
+          {:backoff, next_backoff, %{state | backoff_current: next_backoff}}
+        end
       {:stop, reason} ->
         {:stop, reason, state}
     end
@@ -367,27 +377,5 @@ defmodule Redix.PubSub.Connection do
       |> Keyword.fetch!(:log)
       |> Keyword.fetch!(action)
     Logger.log(level, message)
-  end
-
-  # Errors raised in Redix will be a struct
-  #
-  defp handle_connection_error(state, %ConnectionError{reason: reason} = error) do
-    log state, :failed_connection, [
-      "Failed to connect to Redis (", Utils.format_host(state), "): ",
-      ConnectionError.message(error),
-    ]
-
-    next_backoff = calc_next_backoff(state.backoff_current || state.opts[:backoff_initial], state.opts[:backoff_max])
-    if state.opts[:exit_on_disconnection] do
-      {:stop, reason, state}
-    else
-      {:backoff, next_backoff, %{state | backoff_current: next_backoff}}
-    end
-  end
-
-  # Errors from Redix.Utils.connect/1 _might_ be low-level errors from :gen_tcp.connect/4
-  #
-  defp handle_connection_error(state, error) when is_atom(error) do
-    handle_connection_error(state, %ConnectionError{reason: error})
   end
 end
