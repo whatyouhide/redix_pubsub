@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.1
+
+- Fix a bug related to connection errors.
+
 ## v0.4.0
 
 - Bump the Redix dependency to ~> v0.6.0, which changed connection errors from being any term to being `Redix.ConnectionError` exception structs.
