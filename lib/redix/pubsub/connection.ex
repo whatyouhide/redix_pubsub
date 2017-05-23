@@ -58,10 +58,10 @@ defmodule Redix.PubSub.Connection do
         else
           {:ok, state}
         end
-      {:error, %ConnectionError{reason: reason} = error} ->
+      {:error, reason} ->
         log state, :failed_connection, [
           "Failed to connect to Redis (", Utils.format_host(state), "): ",
-          ConnectionError.message(error),
+          Exception.message(%ConnectionError{reason: reason})
         ]
 
         next_backoff = calc_next_backoff(state.backoff_current || state.opts[:backoff_initial], state.opts[:backoff_max])
