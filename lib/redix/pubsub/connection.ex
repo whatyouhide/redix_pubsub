@@ -141,7 +141,7 @@ defmodule Redix.PubSub.Connection do
     if targets_to_unsubscribe_from == [] do
       {:noreply, state}
     else
-      {channels, patterns} = Enum.partition(targets_to_unsubscribe_from, &match?({:channel, _}, &1))
+      {channels, patterns} = Enum.split_with(targets_to_unsubscribe_from, &match?({:channel, _}, &1))
       commands = [
         Protocol.pack(["UNSUBSCRIBE" | Enum.map(channels, fn({:channel, channel}) -> channel end)]),
         Protocol.pack(["PUNSUBSCRIBE" | Enum.map(patterns, fn({:pattern, pattern}) -> pattern end)]),
@@ -336,7 +336,7 @@ defmodule Redix.PubSub.Connection do
       |> Enum.each(fn(pid) -> send(pid, message(msg_kind, %{kind => target})) end)
     end)
 
-    {channels, patterns} = Enum.partition(subscriptions, &match?({{:channel, _}, _}, &1))
+    {channels, patterns} = Enum.split_with(subscriptions, &match?({{:channel, _}, _}, &1))
     channels = Enum.map(channels, fn({{:channel, channel}, _}) -> channel end)
     patterns = Enum.map(patterns, fn({{:pattern, pattern}, _}) -> pattern end)
 
