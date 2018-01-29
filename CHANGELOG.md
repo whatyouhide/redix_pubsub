@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.2
+
+- Fix some deprecation warnings.
+
 ## v0.4.1
 
 - Fix a bug related to connection errors.
