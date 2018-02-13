@@ -267,7 +267,7 @@ defmodule Redix.PubSub do
       {:ok, #PID<...>}
 
   """
-  @spec start_link(binary | Keyword.t, Keyword.t) :: GenServer.on_start
+  @spec start_link(binary | Keyword.t(), Keyword.t()) :: GenServer.on_start()
   def start_link(uri_or_redis_opts \\ [], connection_opts \\ [])
 
   def start_link(uri, other_opts) when is_binary(uri) and is_list(other_opts) do
@@ -293,7 +293,7 @@ defmodule Redix.PubSub do
       :ok
 
   """
-  @spec stop(GenServer.server) :: :ok
+  @spec stop(GenServer.server()) :: :ok
   def stop(conn, timeout \\ :infinity) do
     GenServer.stop(conn, :normal, timeout)
   end
@@ -322,7 +322,7 @@ defmodule Redix.PubSub do
       :ok
 
   """
-  @spec subscribe(GenServer.server, String.t | [String.t], subscriber) :: :ok
+  @spec subscribe(GenServer.server(), String.t() | [String.t()], subscriber) :: :ok
   def subscribe(conn, channels, subscriber) do
     Connection.cast(conn, {:subscribe, List.wrap(channels), subscriber})
   end
@@ -350,7 +350,7 @@ defmodule Redix.PubSub do
       :ok
 
   """
-  @spec psubscribe(GenServer.server, String.t | [String.t], subscriber) :: :ok
+  @spec psubscribe(GenServer.server(), String.t() | [String.t()], subscriber) :: :ok
   def psubscribe(conn, patterns, subscriber) do
     Connection.cast(conn, {:psubscribe, List.wrap(patterns), subscriber})
   end
@@ -379,7 +379,7 @@ defmodule Redix.PubSub do
       :ok
 
   """
-  @spec unsubscribe(GenServer.server, String.t | [String.t], subscriber) :: :ok
+  @spec unsubscribe(GenServer.server(), String.t() | [String.t()], subscriber) :: :ok
   def unsubscribe(conn, channels, subscriber) do
     Connection.cast(conn, {:unsubscribe, List.wrap(channels), subscriber})
   end
@@ -407,7 +407,7 @@ defmodule Redix.PubSub do
       :ok
 
   """
-  @spec punsubscribe(GenServer.server, String.t | [String.t], subscriber) :: :ok
+  @spec punsubscribe(GenServer.server(), String.t() | [String.t()], subscriber) :: :ok
   def punsubscribe(conn, patterns, subscriber) do
     Connection.cast(conn, {:punsubscribe, List.wrap(patterns), subscriber})
   end

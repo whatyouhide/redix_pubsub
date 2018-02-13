@@ -6,7 +6,7 @@ defmodule Redix.PubSubTest do
   alias Redix.PubSub
 
   setup do
-    {:ok, ps} = PubSub.start_link
+    {:ok, ps} = PubSub.start_link()
     {:ok, %{conn: ps}}
   end
 
@@ -37,7 +37,7 @@ defmodule Redix.PubSubTest do
   end
 
   test "psubscribe/punsubscribe flow", %{conn: ps} do
-    {:ok, c} = Redix.start_link
+    {:ok, c} = Redix.start_link()
 
     PubSub.psubscribe(ps, ["foo*", "ba?"], self())
     assert_receive {:redix_pubsub, ^ps, :psubscribed, %{pattern: "foo*"}}
@@ -47,12 +47,18 @@ defmodule Redix.PubSubTest do
       ~w(PUBLISH foo_1 foo_1),
       ~w(PUBLISH foo_2 foo_2),
       ~w(PUBLISH bar bar),
-      ~w(PUBLISH barfoo barfoo),
+      ~w(PUBLISH barfoo barfoo)
     ])
 
-    assert_receive {:redix_pubsub, ^ps, :pmessage, %{payload: "foo_1", channel: "foo_1", pattern: "foo*"}}
-    assert_receive {:redix_pubsub, ^ps, :pmessage, %{payload: "foo_2", channel: "foo_2", pattern: "foo*"}}
-    assert_receive {:redix_pubsub, ^ps, :pmessage, %{payload: "bar", channel: "bar", pattern: "ba?"}}
+    assert_receive {:redix_pubsub, ^ps, :pmessage,
+                    %{payload: "foo_1", channel: "foo_1", pattern: "foo*"}}
+
+    assert_receive {:redix_pubsub, ^ps, :pmessage,
+                    %{payload: "foo_2", channel: "foo_2", pattern: "foo*"}}
+
+    assert_receive {:redix_pubsub, ^ps, :pmessage,
+                    %{payload: "bar", channel: "bar", pattern: "ba?"}}
+
     refute_receive {:redix_pubsub, ^ps, :pmessage, %{payload: "barfoo"}}
 
     PubSub.punsubscribe(ps, "foo*", self())
@@ -61,11 +67,13 @@ defmodule Redix.PubSubTest do
     Redix.pipeline!(c, [~w(PUBLISH foo_x foo_x), ~w(PUBLISH baz baz)])
 
     refute_receive {:redix_pubsub, ^ps, :pmessage, %{payload: "foo_x"}}
-    assert_receive {:redix_pubsub, ^ps, :pmessage, %{payload: "baz", channel: "baz", pattern: "ba?"}}
+
+    assert_receive {:redix_pubsub, ^ps, :pmessage,
+                    %{payload: "baz", channel: "baz", pattern: "ba?"}}
   end
 
   test "subscribing the same pid to the same channel more than once has no effect", %{conn: ps} do
-    {:ok, c} = Redix.start_link
+    {:ok, c} = Redix.start_link()
 
     assert :ok = PubSub.subscribe(ps, "foo", self())
     assert :ok = PubSub.subscribe(ps, "foo", self())
@@ -79,7 +87,7 @@ defmodule Redix.PubSubTest do
   end
 
   test "pubsub: unsubscribing a recipient doesn't affect other recipients", %{conn: ps} do
-    {:ok, c} = Redix.start_link
+    {:ok, c} = Redix.start_link()
 
     parent = self()
     mirror = spawn_link(fn -> message_mirror(parent) end)
@@ -106,8 +114,9 @@ defmodule Redix.PubSubTest do
     assert_receive {^mirror, {:redix_pubsub, ^ps, :message, %{payload: "hello"}}}
   end
 
-  test "after unsubscribing from a channel, resubscribing one recipient resubscribes correctly", %{conn: ps} do
-    {:ok, c} = Redix.start_link
+  test "after unsubscribing from a channel, resubscribing one recipient resubscribes correctly",
+       %{conn: ps} do
+    {:ok, c} = Redix.start_link()
 
     PubSub.subscribe(ps, "my_channel", self())
     assert_receive {:redix_pubsub, ^ps, :subscribed, _properties}
@@ -142,13 +151,13 @@ defmodule Redix.PubSubTest do
     assert :ok = PubSub.subscribe(ps, "foo", self())
     assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}
 
-    {:ok, c} = Redix.start_link
+    {:ok, c} = Redix.start_link()
 
-    capture_log fn ->
+    capture_log(fn ->
       Redix.command!(c, ~w(CLIENT KILL TYPE pubsub))
       assert_receive {:redix_pubsub, ^ps, :disconnected, %{error: %Redix.ConnectionError{}}}
       assert_receive {:redix_pubsub, ^ps, :subscribed, %{channel: "foo"}}, 1000
-    end
+    end)
 
     Redix.command!(c, ~w(PUBLISH foo hello))
     assert_receive {:redix_pubsub, ^ps, :message, %{channel: "foo", payload: "hello"}}
@@ -156,7 +165,7 @@ defmodule Redix.PubSubTest do
 
   test ":exit_on_disconnection option" do
     {:ok, ps} = PubSub.start_link([], exit_on_disconnection: true)
-    {:ok, c} = Redix.start_link
+    {:ok, c} = Redix.start_link()
 
     # We need to subscribe to something so that this client becomes a PubSub
     # client and we can kill it with "CLIENT KILL TYPE pubsub".
@@ -165,10 +174,10 @@ defmodule Redix.PubSubTest do
 
     Process.flag(:trap_exit, true)
 
-    capture_log fn ->
+    capture_log(fn ->
       Redix.command!(c, ~w(CLIENT KILL TYPE pubsub))
       assert_receive {:EXIT, ^ps, :tcp_closed}
-    end
+    end)
   end
 
   # This function just sends back to this process every message it receives.
@@ -176,6 +185,7 @@ defmodule Redix.PubSubTest do
     receive do
       msg -> send(parent, {self(), msg})
     end
+
     message_mirror(parent)
   end
 end
