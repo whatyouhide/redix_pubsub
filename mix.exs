@@ -34,7 +34,7 @@ defmodule RedixPubsub.Mixfile do
   defp deps() do
     [
       {:connection, "~> 1.0"},
-      {:redix, "~> 0.6.0"},
+      {:redix, "~> 0.7.0"},
       {:ex_doc, "~> 0.15", only: :dev}
     ]
   end
