@@ -280,7 +280,7 @@ defmodule Redix.PubSub.Connection do
     message = message(:message, %{channel: channel, payload: payload})
 
     subscriptions
-    |> Map.fetch!({:channel, channel})
+    |> Map.get({:channel, channel}, [])
     |> Enum.each(fn({subscriber, _monitor}) -> send(subscriber, message) end)
 
     state
@@ -290,7 +290,7 @@ defmodule Redix.PubSub.Connection do
     message = message(:pmessage, %{channel: channel, pattern: pattern, payload: payload})
 
     subscriptions
-    |> Map.fetch!({:pattern, pattern})
+    |> Map.get({:pattern, pattern}, [])
     |> Enum.each(fn({subscriber, _monitor}) -> send(subscriber, message) end)
 
     state
@@ -378,7 +378,7 @@ defmodule Redix.PubSub.Connection do
       |> Keyword.fetch!(action)
     Logger.log(level, message)
   end
-  
+
   # TODO: remove once we depend on Elixir 1.4 and on.
   Code.ensure_loaded(Enum)
 
