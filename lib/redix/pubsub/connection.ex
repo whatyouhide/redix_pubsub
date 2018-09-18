@@ -173,14 +173,9 @@ defmodule Redix.PubSub.Connection do
 
   defp sync_connect(state) do
     case establish_connection(state.opts) do
-      {:ok, socket} ->
-        {:ok, %{state | socket: socket}}
-
-      {:error, reason} ->
-        {:stop, reason}
-
-      {:stop, _reason} = stop ->
-        stop
+      {:ok, socket} -> {:ok, %{state | socket: socket}}
+      {:error, reason} -> {:stop, reason}
+      {:stop, reason} -> {:stop, reason}
     end
   end
 
@@ -265,8 +260,7 @@ defmodule Redix.PubSub.Connection do
         if for_target = Map.get(acc, key) do
           case Map.pop(for_target, subscriber) do
             {ref, new_for_target} when is_reference(ref) ->
-              Process.demonitor(ref)
-              flush_monitor_messages(ref)
+              Process.demonitor(ref, [:flush])
 
               targets_to_unsubscribe_from =
                 if map_size(new_for_target) == 0 do
@@ -399,14 +393,6 @@ defmodule Redix.PubSub.Connection do
       :ok
     else
       :gen_tcp.send(state.socket, Enum.map(redis_command, &Protocol.pack/1))
-    end
-  end
-
-  defp flush_monitor_messages(ref) do
-    receive do
-      {:DOWN, ^ref, _, _, _} -> flush_monitor_messages(ref)
-    after
-      0 -> :ok
     end
   end
 
