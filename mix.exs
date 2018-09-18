@@ -7,7 +7,7 @@ defmodule RedixPubsub.Mixfile do
     [
       app: :redix_pubsub,
       version: @version,
-      elixir: "~> 1.2",
+      elixir: "~> 1.6",
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -28,14 +28,14 @@ defmodule RedixPubsub.Mixfile do
   end
 
   def application() do
-    [applications: [:logger, :redix]]
+    [extra_applications: [:logger]]
   end
 
   defp deps() do
     [
       {:connection, "~> 1.0"},
       {:redix, "~> 0.6.0"},
-      {:ex_doc, "~> 0.15", only: :dev}
+      {:ex_doc, "~> 0.19", only: :dev}
     ]
   end
 end

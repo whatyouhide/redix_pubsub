@@ -158,7 +158,7 @@ defmodule Redix.PubSub.Connection do
       {:noreply, state}
     else
       {channels, patterns} =
-        enum_split_with(targets_to_unsubscribe_from, &match?({:channel, _}, &1))
+        Enum.split_with(targets_to_unsubscribe_from, &match?({:channel, _}, &1))
 
       commands = [
         Protocol.pack(["UNSUBSCRIBE" | Enum.map(channels, fn {:channel, channel} -> channel end)]),
@@ -196,7 +196,7 @@ defmodule Redix.PubSub.Connection do
   end
 
   defp new_data(state, data) do
-    case (state.continuation || &Protocol.parse/1).(data) do
+    case (state.continuation || (&Protocol.parse/1)).(data) do
       {:ok, resp, rest} ->
         state = handle_pubsub_msg(state, resp)
         new_data(%{state | continuation: nil}, rest)
@@ -375,7 +375,7 @@ defmodule Redix.PubSub.Connection do
       |> Enum.each(fn pid -> send(pid, message(msg_kind, %{kind => target})) end)
     end)
 
-    {channels, patterns} = enum_split_with(subscriptions, &match?({{:channel, _}, _}, &1))
+    {channels, patterns} = Enum.split_with(subscriptions, &match?({{:channel, _}, _}, &1))
     channels = Enum.map(channels, fn {{:channel, channel}, _} -> channel end)
     patterns = Enum.map(patterns, fn {{:pattern, pattern}, _} -> pattern end)
 
@@ -418,10 +418,4 @@ defmodule Redix.PubSub.Connection do
 
     Logger.log(level, message)
   end
-
-  # TODO: remove once we depend on Elixir 1.4 and on.
-  Code.ensure_loaded(Enum)
-
-  split_with = if function_exported?(Enum, :split_with, 2), do: :split_with, else: :partition
-  defp enum_split_with(enum, fun), do: apply(Enum, unquote(split_with), [enum, fun])
 end
