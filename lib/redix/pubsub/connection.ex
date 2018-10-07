@@ -40,8 +40,8 @@ defmodule Redix.PubSub.Connection do
 
         {:ok, :connected, data}
       else
-        {:error, reason} -> {:stop, reason, data}
-        {:stop, reason} -> {:stop, reason, data}
+        {:error, reason} -> {:stop, reason}
+        {:stop, reason} -> {:stop, reason}
       end
     else
       send(self(), :handle_possible_erlang_bug)
