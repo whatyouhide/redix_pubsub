@@ -21,7 +21,7 @@ defmodule Redix.PubSub.Connection do
   @backoff_exponent 1.5
 
   @impl true
-  def callback_mode(), do: [:state_functions, :state_enter]
+  def callback_mode(), do: :state_functions
 
   @impl true
   def init(opts) do
@@ -38,24 +38,34 @@ defmodule Redix.PubSub.Connection do
             backoff_current: nil
         }
 
-        {:next_state, :connected, data}
+        {:ok, :connected, data}
       else
         {:error, reason} -> {:stop, reason, data}
         {:stop, reason} -> {:stop, reason, data}
       end
     else
-      {:ok, :disconnected, data, {:next_event, :internal, :connect}}
+      send(self(), :handle_possible_erlang_bug)
+      {:ok, :state_needed_because_of_possible_erlang_bug, data}
     end
   end
 
   ## States
 
-  # Triggered when we enter this state for the first time (we've never connected before).
-  def disconnected(:enter, :disconnected, _data) do
-    :keep_state_and_data
+  # If I use the action {:next_event, :internal, :connect} when returning
+  # {:ok, :disconnected, data} from init/1, then Erlang 20 (not 21) blows up saying:
+  # {:bad_return_from_init, {:next_events, :internal, :connect}}. The weird thing is
+  # that if I use `{:next_even, :internal, :connect}` it complains but with `:next_even`,
+  # but with `:next_event` it seems to add the final "s" (`:next_events`). No idea
+  # what's going on and no time to fix it.
+  def state_needed_because_of_possible_erlang_bug(:info, :handle_possible_erlang_bug, data) do
+    {:next_state, :disconnected, data, {:next_event, :internal, :connect}}
   end
 
-  def disconnected(:enter, :connected, data) do
+  def state_needed_because_of_possible_erlang_bug(_event, _info, _data) do
+    {:keep_state_and_data, :postpone}
+  end
+
+  def disconnected(:internal, :handle_disconnection, data) do
     log(data, :disconnection, fn ->
       "Disconnected from Redis (#{Utils.format_host(data)}): " <>
         Exception.message(data.last_disconnect_reason)
@@ -84,7 +94,7 @@ defmodule Redix.PubSub.Connection do
       end
 
       data = %__MODULE__{data | socket: socket, last_disconnect_reason: nil, backoff_current: nil}
-      {:next_state, :connected, data}
+      {:next_state, :connected, data, {:next_event, :internal, :handle_connection}}
     else
       {:error, reason} ->
         log(data, :failed_connection, fn ->
@@ -140,7 +150,7 @@ defmodule Redix.PubSub.Connection do
     end
   end
 
-  def connected(:enter, _old_state, data) do
+  def connected(:internal, :handle_connection, data) do
     # We clean up channels/patterns that don't have any subscribers. We do this because some
     # subscribers could have unsubscribed from a channel/pattern while disconnected.
     data =
@@ -477,7 +487,8 @@ defmodule Redix.PubSub.Connection do
     {next_backoff, data} = next_backoff(data)
     data = put_in(data.last_disconnect_reason, %ConnectionError{reason: reason})
     timeout_action = {{:timeout, :reconnect}, next_backoff, nil}
-    {:next_state, :disconnected, data, timeout_action}
+    actions = [{:next_event, :internal, :handle_disconnection}, timeout_action]
+    {:next_state, :disconnected, data, actions}
   end
 
   defp send(pid, ref, kind, properties)
