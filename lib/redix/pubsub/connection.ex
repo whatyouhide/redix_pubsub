@@ -1,404 +1,493 @@
 defmodule Redix.PubSub.Connection do
   @moduledoc false
 
-  use Connection
+  @behaviour :gen_statem
 
-  alias Redix.Protocol
-  alias Redix.Utils
-  alias Redix.ConnectionError
+  alias Redix.{ConnectionError, Protocol, Utils}
 
   require Logger
 
-  defstruct opts: nil,
-            socket: nil,
-            continuation: nil,
-            backoff_current: nil,
-            # A dictionary of `channel => recipient_pids` where `channel` is either
-            # `{:channel, "foo"}` or `{:pattern, "foo*"}` and `recipient_pids` is a
-            # map of pids of recipients to their monitor ref for that
-            # channel/pattern.
-            subscriptions: %{}
+  defstruct [
+    :opts,
+    :transport,
+    :socket,
+    :continuation,
+    :backoff_current,
+    :last_disconnect_reason,
+    subscriptions: %{},
+    monitors: %{}
+  ]
 
   @backoff_exponent 1.5
 
-  ## Callbacks
+  @impl true
+  def callback_mode(), do: [:state_functions, :state_enter]
 
+  @impl true
   def init(opts) do
-    state = %__MODULE__{opts: opts}
+    transport = if(opts[:ssl], do: :ssl, else: :gen_tcp)
+    data = %__MODULE__{opts: opts, transport: transport}
 
     if opts[:sync_connect] do
-      sync_connect(state)
-    else
-      {:connect, :init, state}
-    end
-  end
+      with {:ok, socket} <- Utils.connect(data.opts),
+           :ok <- setopts(data, socket, active: :once) do
+        data = %__MODULE__{
+          data
+          | socket: socket,
+            last_disconnect_reason: nil,
+            backoff_current: nil
+        }
 
-  def connect(info, state) do
-    case establish_connection(state.opts) do
-      {:ok, socket} ->
-        state = %{state | socket: socket}
-
-        if info == :backoff do
-          log(state, :reconnection, ["Reconnected to Redis (", Utils.format_host(state), ?)])
-
-          case resubscribe_after_reconnection(state) do
-            :ok ->
-              {:ok, state}
-
-            {:error, reason} ->
-              {:disconnect, {:error, %ConnectionError{reason: reason}}, state}
-          end
-        else
-          {:ok, state}
-        end
-
-      {:error, reason} ->
-        log(state, :failed_connection, [
-          "Failed to connect to Redis (",
-          Utils.format_host(state),
-          "): ",
-          Exception.message(%ConnectionError{reason: reason})
-        ])
-
-        next_backoff =
-          calc_next_backoff(
-            state.backoff_current || state.opts[:backoff_initial],
-            state.opts[:backoff_max]
-          )
-
-        if state.opts[:exit_on_disconnection] do
-          {:stop, reason, state}
-        else
-          {:backoff, next_backoff, %{state | backoff_current: next_backoff}}
-        end
-
-      {:stop, reason} ->
-        {:stop, reason, state}
-    end
-  end
-
-  def disconnect({:error, %ConnectionError{reason: reason} = error}, state) do
-    log(state, :disconnection, [
-      "Disconnected from Redis (",
-      Utils.format_host(state),
-      "): ",
-      ConnectionError.message(error)
-    ])
-
-    :ok = :gen_tcp.close(state.socket)
-
-    if state.opts[:exit_on_disconnection] do
-      {:stop, reason, state}
-    else
-      for {_target, subscribers} <- state.subscriptions,
-          {subscriber, _monitor} <- subscribers do
-        send(subscriber, message(:disconnected, %{error: error}))
+        {:next_state, :connected, data}
+      else
+        {:error, reason} -> {:stop, reason, data}
+        {:stop, reason} -> {:stop, reason, data}
       end
-
-      state = %{
-        state
-        | socket: nil,
-          continuation: nil,
-          backoff_current: state.opts[:backoff_initial]
-      }
-
-      {:backoff, state.opts[:backoff_initial], state}
-    end
-  end
-
-  def handle_cast({operation, targets, subscriber}, state)
-      when operation in [:subscribe, :psubscribe] do
-    register_subscription(state, operation, targets, subscriber)
-  end
-
-  def handle_cast({operation, channels, subscriber}, state)
-      when operation in [:unsubscribe, :punsubscribe] do
-    register_unsubscription(state, operation, channels, subscriber)
-  end
-
-  def handle_cast(:stop, state) do
-    {:disconnect, :stop, state}
-  end
-
-  def handle_info({:tcp, socket, data}, %{socket: socket} = state) do
-    :ok = :inet.setopts(socket, active: :once)
-    state = new_data(state, data)
-    {:noreply, state}
-  end
-
-  def handle_info({:tcp_closed, socket}, %{socket: socket} = state) do
-    {:disconnect, {:error, %ConnectionError{reason: :tcp_closed}}, state}
-  end
-
-  def handle_info({:tcp_error, socket, reason}, %{socket: socket} = state) do
-    {:disconnect, {:error, %ConnectionError{reason: reason}}, state}
-  end
-
-  def handle_info({:DOWN, ref, :process, pid, _reason}, %{subscriptions: subscriptions} = state) do
-    {targets_to_unsubscribe_from, subscriptions} =
-      Enum.flat_map_reduce(subscriptions, subscriptions, fn {key, subscribers}, acc ->
-        subscribers =
-          case Map.pop(subscribers, pid) do
-            {^ref, new_subscribers} -> new_subscribers
-            {_, subscribers} -> subscribers
-          end
-
-        acc = Map.put(acc, key, subscribers)
-
-        if map_size(subscribers) == 0 do
-          {[key], Map.delete(acc, key)}
-        else
-          {[], acc}
-        end
-      end)
-
-    state = %{state | subscriptions: subscriptions}
-
-    if targets_to_unsubscribe_from == [] do
-      {:noreply, state}
     else
-      {channels, patterns} =
-        Enum.split_with(targets_to_unsubscribe_from, &match?({:channel, _}, &1))
-
-      commands = [
-        Protocol.pack(["UNSUBSCRIBE" | Enum.map(channels, fn {:channel, channel} -> channel end)]),
-        Protocol.pack(["PUNSUBSCRIBE" | Enum.map(patterns, fn {:pattern, pattern} -> pattern end)])
-      ]
-
-      send_noreply_or_disconnect(state, commands)
+      {:ok, :disconnected, data, {:next_event, :internal, :connect}}
     end
   end
 
-  ## Helper functions
+  ## States
 
-  defp sync_connect(state) do
-    case establish_connection(state.opts) do
-      {:ok, socket} -> {:ok, %{state | socket: socket}}
-      {:error, reason} -> {:stop, reason}
-      {:stop, reason} -> {:stop, reason}
-    end
+  # Triggered when we enter this state for the first time (we've never connected before).
+  def disconnected(:enter, :disconnected, _data) do
+    :keep_state_and_data
   end
 
-  defp establish_connection(opts) do
-    with {:ok, socket} <- Utils.connect(opts),
-         :ok <- :inet.setopts(socket, active: :once) do
-      {:ok, socket}
-    end
-  end
-
-  defp new_data(state, <<>>) do
-    state
-  end
-
-  defp new_data(state, data) do
-    case (state.continuation || (&Protocol.parse/1)).(data) do
-      {:ok, resp, rest} ->
-        state = handle_pubsub_msg(state, resp)
-        new_data(%{state | continuation: nil}, rest)
-
-      {:continuation, continuation} ->
-        %{state | continuation: continuation}
-    end
-  end
-
-  defp register_subscription(%{subscriptions: subscriptions} = state, kind, targets, subscriber) do
-    msg_kind =
-      case kind do
-        :subscribe -> :subscribed
-        :psubscribe -> :psubscribed
-      end
-
-    {targets_to_subscribe_to, subscriptions} =
-      Enum.flat_map_reduce(targets, subscriptions, fn target, acc ->
-        {target_type, _} = key = key_for_target(kind, target)
-
-        {targets_to_subscribe_to, for_target} =
-          case Map.get(acc, key, %{}) do
-            for_target when map_size(for_target) == 0 ->
-              {[target], for_target}
-
-            for_target ->
-              {[], for_target}
-          end
-
-        for_target =
-          Map.put_new_lazy(for_target, subscriber, fn -> Process.monitor(subscriber) end)
-
-        acc = Map.put(acc, key, for_target)
-        send(subscriber, message(msg_kind, %{target_type => target}))
-        {targets_to_subscribe_to, acc}
-      end)
-
-    state = %{state | subscriptions: subscriptions}
-
-    if targets_to_subscribe_to == [] do
-      {:noreply, state}
-    else
-      redis_command =
-        case kind do
-          :subscribe -> "SUBSCRIBE"
-          :psubscribe -> "PSUBSCRIBE"
-        end
-
-      command = Protocol.pack([redis_command | targets_to_subscribe_to])
-      send_noreply_or_disconnect(state, command)
-    end
-  end
-
-  defp register_unsubscription(%{subscriptions: subscriptions} = state, kind, targets, subscriber) do
-    msg_kind =
-      case kind do
-        :unsubscribe -> :unsubscribed
-        :punsubscribe -> :punsubscribed
-      end
-
-    {targets_to_unsubscribe_from, subscriptions} =
-      Enum.flat_map_reduce(targets, subscriptions, fn target, acc ->
-        {target_type, _} = key = key_for_target(kind, target)
-        send(subscriber, message(msg_kind, %{target_type => target}))
-
-        if for_target = Map.get(acc, key) do
-          case Map.pop(for_target, subscriber) do
-            {ref, new_for_target} when is_reference(ref) ->
-              Process.demonitor(ref, [:flush])
-
-              targets_to_unsubscribe_from =
-                if map_size(new_for_target) == 0 do
-                  [target]
-                else
-                  []
-                end
-
-              acc = Map.put(acc, key_for_target(kind, target), new_for_target)
-              {targets_to_unsubscribe_from, acc}
-
-            {nil, _} ->
-              {[], acc}
-          end
-        else
-          {[], acc}
-        end
-      end)
-
-    state = %{state | subscriptions: subscriptions}
-
-    if targets_to_unsubscribe_from == [] do
-      {:noreply, state}
-    else
-      redis_command =
-        case kind do
-          :unsubscribe -> "UNSUBSCRIBE"
-          :punsubscribe -> "PUNSUBSCRIBE"
-        end
-
-      command = Protocol.pack([redis_command | targets_to_unsubscribe_from])
-      send_noreply_or_disconnect(state, command)
-    end
-  end
-
-  defp handle_pubsub_msg(state, [operation, _target, _count])
-       when operation in ~w(subscribe psubscribe unsubscribe punsubscribe) do
-    state
-  end
-
-  defp handle_pubsub_msg(%{subscriptions: subscriptions} = state, ["message", channel, payload]) do
-    message = message(:message, %{channel: channel, payload: payload})
-
-    subscriptions
-    |> Map.fetch!({:channel, channel})
-    |> Enum.each(fn {subscriber, _monitor} -> send(subscriber, message) end)
-
-    state
-  end
-
-  defp handle_pubsub_msg(%{subscriptions: subscriptions} = state, [
-         "pmessage",
-         pattern,
-         channel,
-         payload
-       ]) do
-    message = message(:pmessage, %{channel: channel, pattern: pattern, payload: payload})
-
-    subscriptions
-    |> Map.fetch!({:pattern, pattern})
-    |> Enum.each(fn {subscriber, _monitor} -> send(subscriber, message) end)
-
-    state
-  end
-
-  defp calc_next_backoff(backoff_current, backoff_max) do
-    next_exponential_backoff = round(backoff_current * @backoff_exponent)
-
-    if backoff_max == :infinity do
-      next_exponential_backoff
-    else
-      min(next_exponential_backoff, backoff_max)
-    end
-  end
-
-  defp key_for_target(kind, target) when kind in [:subscribe, :unsubscribe],
-    do: {:channel, target}
-
-  defp key_for_target(kind, target) when kind in [:psubscribe, :punsubscribe],
-    do: {:pattern, target}
-
-  defp message(kind, properties) when is_atom(kind) and is_map(properties) do
-    {:redix_pubsub, self(), kind, properties}
-  end
-
-  defp send_noreply_or_disconnect(%{socket: socket} = state, data) do
-    case :gen_tcp.send(socket, data) do
-      :ok ->
-        {:noreply, state}
-
-      {:error, reason} ->
-        {:disconnect, {:error, %ConnectionError{reason: reason}}, state}
-    end
-  end
-
-  defp resubscribe_after_reconnection(%{subscriptions: subscriptions} = state) do
-    Enum.each(subscriptions, fn {{kind, target}, subscribers} ->
-      msg_kind =
-        case kind do
-          :channel -> :subscribed
-          :pattern -> :psubscribed
-        end
-
-      subscribers
-      |> Map.keys()
-      |> Enum.each(fn pid -> send(pid, message(msg_kind, %{kind => target})) end)
+  def disconnected(:enter, :connected, data) do
+    log(data, :disconnection, fn ->
+      "Disconnected from Redis (#{Utils.format_host(data)}): " <>
+        Exception.message(data.last_disconnect_reason)
     end)
 
-    {channels, patterns} = Enum.split_with(subscriptions, &match?({{:channel, _}, _}, &1))
-    channels = Enum.map(channels, fn {{:channel, channel}, _} -> channel end)
-    patterns = Enum.map(patterns, fn {{:pattern, pattern}, _} -> pattern end)
-
-    redis_command = []
-
-    redis_command =
-      if channels != [] do
-        redis_command ++ [["SUBSCRIBE" | channels]]
-      else
-        redis_command
-      end
-
-    redis_command =
-      if patterns != [] do
-        redis_command ++ [["PSUBSCRIBE" | patterns]]
-      else
-        redis_command
-      end
-
-    if redis_command == [] do
-      :ok
+    if data.opts[:exit_on_disconnection] do
+      {:stop, data.last_disconnect_reason}
     else
-      :gen_tcp.send(state.socket, Enum.map(redis_command, &Protocol.pack/1))
+      Enum.each(data.monitors, fn {pid, ref} ->
+        send(pid, ref, :disconnected, %{error: data.last_disconnect_reason})
+      end)
+
+      :keep_state_and_data
     end
   end
 
-  defp log(state, action, message) do
+  def disconnected({:timeout, :reconnect}, nil, _data) do
+    {:keep_state_and_data, {:next_event, :internal, :connect}}
+  end
+
+  def disconnected(:internal, :connect, data) do
+    with {:ok, socket} <- Utils.connect(data.opts),
+         :ok <- setopts(data, socket, active: :once) do
+      if data.last_disconnect_reason do
+        log(data, :reconnection, fn -> "Reconnected to Redis (#{Utils.format_host(data)})" end)
+      end
+
+      data = %__MODULE__{data | socket: socket, last_disconnect_reason: nil, backoff_current: nil}
+      {:next_state, :connected, data}
+    else
+      {:error, reason} ->
+        log(data, :failed_connection, fn ->
+          "Failed to connect to Redis (#{Utils.format_host(data)}): " <>
+            Exception.message(%ConnectionError{reason: reason})
+        end)
+
+        disconnect(data, reason)
+
+      {:stop, reason} ->
+        {:stop, reason, data}
+    end
+  end
+
+  def disconnected({:call, from}, {operation, targets, pid}, data)
+      when operation in [:subscribe, :psubscribe] do
+    {data, ref} = monitor_new(data, pid)
+    :ok = :gen_statem.reply(from, {:ok, ref})
+
+    # We can just add subscribers to channels here since when we'll reconnect, the connection
+    # will have to reconnect to all the channels/patterns anyways.
+    {_targets_to_subscribe_to, data} = subscribe_pid_to_targets(data, operation, targets, pid)
+
+    send(pid, ref, :disconnected, %{reason: data.last_disconnect_reason})
+
+    {:keep_state, data}
+  end
+
+  def disconnected({:call, from}, {operation, targets, pid}, data)
+      when operation in [:unsubscribe, :punsubscribe] do
+    :ok = :gen_statem.reply(from, :ok)
+
+    case data.monitors[pid] do
+      ref when is_reference(ref) ->
+        {_targets_to_unsubscribe_from, data} =
+          unsubscribe_pid_from_targets(data, operation, targets, pid)
+
+        {kind, target_type} =
+          case operation do
+            :unsubscribe -> {:unsubscribed, :channel}
+            :punsubscribe -> {:punsubscribed, :pattern}
+          end
+
+        Enum.each(targets, fn target ->
+          send(pid, ref, kind, %{target_type => target})
+        end)
+
+        data = demonitor_if_not_subscribed_to_anything(data, pid)
+        {:keep_state, data}
+
+      nil ->
+        :keep_state_and_data
+    end
+  end
+
+  def connected(:enter, _old_state, data) do
+    # We clean up channels/patterns that don't have any subscribers. We do this because some
+    # subscribers could have unsubscribed from a channel/pattern while disconnected.
+    data =
+      update_in(data.subscriptions, fn subscriptions ->
+        :maps.filter(fn _target, subscribers -> MapSet.size(subscribers) > 0 end, subscriptions)
+      end)
+
+    channels_to_subscribe_to =
+      for {{:channel, channel}, subscribers} <- data.subscriptions do
+        Enum.each(subscribers, fn pid ->
+          ref = Map.fetch!(data.monitors, pid)
+          send(pid, ref, :subscribed, %{channel: channel})
+        end)
+
+        channel
+      end
+
+    patterns_to_subscribe_to =
+      for {{:pattern, pattern}, subscribers} <- data.subscriptions do
+        Enum.each(subscribers, fn pid ->
+          ref = Map.fetch!(data.monitors, pid)
+          send(pid, ref, :psubscribe, %{pattern: pattern})
+        end)
+
+        pattern
+      end
+
+    case subscribe(data, channels_to_subscribe_to, patterns_to_subscribe_to) do
+      :ok -> {:keep_state, data}
+      {:error, reason} -> disconnect(data, reason)
+    end
+  end
+
+  def connected({:call, from}, {operation, targets, pid}, data)
+      when operation in [:subscribe, :psubscribe] do
+    {data, ref} = monitor_new(data, pid)
+    :ok = :gen_statem.reply(from, {:ok, ref})
+
+    {targets_to_subscribe_to, data} = subscribe_pid_to_targets(data, operation, targets, pid)
+
+    {kind, target_type} =
+      case operation do
+        :subscribe -> {:subscribed, :channel}
+        :psubscribe -> {:psubscribed, :pattern}
+      end
+
+    Enum.each(targets, fn target ->
+      send(pid, ref, kind, %{target_type => target})
+    end)
+
+    {channels_to_subscribe_to, patterns_to_subscribe_to} =
+      case operation do
+        :subscribe -> {targets_to_subscribe_to, []}
+        :psubscribe -> {[], targets_to_subscribe_to}
+      end
+
+    case subscribe(data, channels_to_subscribe_to, patterns_to_subscribe_to) do
+      :ok -> {:keep_state, data}
+      {:error, reason} -> disconnect(data, reason)
+    end
+  end
+
+  def connected({:call, from}, {operation, targets, pid}, data)
+      when operation in [:unsubscribe, :punsubscribe] do
+    :ok = :gen_statem.reply(from, :ok)
+
+    case data.monitors[pid] do
+      ref when is_reference(ref) ->
+        {targets_to_unsubscribe_from, data} =
+          unsubscribe_pid_from_targets(data, operation, targets, pid)
+
+        {kind, target_type} =
+          case operation do
+            :unsubscribe -> {:unsubscribed, :channel}
+            :punsubscribe -> {:punsubscribed, :pattern}
+          end
+
+        Enum.each(targets, fn target ->
+          send(pid, ref, kind, %{target_type => target})
+        end)
+
+        data = demonitor_if_not_subscribed_to_anything(data, pid)
+
+        {channels_to_unsubscribe_from, patterns_to_unsubscribe_from} =
+          case operation do
+            :unsubscribe -> {targets_to_unsubscribe_from, []}
+            :punsubscribe -> {[], targets_to_unsubscribe_from}
+          end
+
+        case unsubscribe(data, channels_to_unsubscribe_from, patterns_to_unsubscribe_from) do
+          :ok -> {:keep_state, data}
+          {:error, reason} -> disconnect(data, reason)
+        end
+
+      nil ->
+        :keep_state_and_data
+    end
+  end
+
+  def connected(:info, {transport_closed, socket}, %__MODULE__{socket: socket} = data)
+      when transport_closed in [:tcp_closed, :ssl_closed] do
+    disconnect(data, transport_closed)
+  end
+
+  def connected(:info, {transport_error, socket, reason}, %__MODULE__{socket: socket} = data)
+      when transport_error in [:tcp_error, :ssl_error] do
+    disconnect(data, reason)
+  end
+
+  def connected(:info, {transport, socket, bytes}, %__MODULE__{socket: socket} = data)
+      when transport in [:tcp, :ssl] do
+    :ok = setopts(data, socket, active: :once)
+    data = new_bytes(data, bytes)
+    {:keep_state, data}
+  end
+
+  def connected(:info, {:DOWN, ref, :process, pid, _reason}, data) do
+    {^ref, data} = pop_in(data.monitors[pid])
+
+    {targets_to_unsubscribe_from, data} =
+      get_and_update_in(data.subscriptions, fn subscriptions ->
+        Enum.flat_map_reduce(subscriptions, subscriptions, fn {target, subscribers}, acc ->
+          new_subscribers = MapSet.delete(subscribers, pid)
+
+          if MapSet.size(new_subscribers) == 0 do
+            {[target], Map.put(acc, target, new_subscribers)}
+          else
+            {[], Map.put(acc, target, new_subscribers)}
+          end
+        end)
+      end)
+
+    channels_to_unsubscribe_from =
+      for {:channel, channel} <- targets_to_unsubscribe_from, do: channel
+
+    patterns_to_unsubscribe_from =
+      for {:pattern, pattern} <- targets_to_unsubscribe_from, do: pattern
+
+    case unsubscribe(data, channels_to_unsubscribe_from, patterns_to_unsubscribe_from) do
+      :ok -> {:keep_state, data}
+      {:error, reason} -> disconnect(data, reason)
+    end
+  end
+
+  ## Helpers
+
+  defp new_bytes(data, "") do
+    data
+  end
+
+  defp new_bytes(data, bytes) do
+    case (data.continuation || (&Protocol.parse/1)).(bytes) do
+      {:ok, resp, rest} ->
+        data = handle_pubsub_msg(data, resp)
+        new_bytes(%{data | continuation: nil}, rest)
+
+      {:continuation, continuation} ->
+        %{data | continuation: continuation}
+    end
+  end
+
+  defp handle_pubsub_msg(data, [operation, _target, _count])
+       when operation in ["subscribe", "psubscribe", "unsubscribe", "punsubscribe"] do
+    data
+  end
+
+  defp handle_pubsub_msg(data, ["message", channel, payload]) do
+    subscribers = Map.get(data.subscriptions, {:channel, channel}, [])
+    properties = %{channel: channel, payload: payload}
+
+    Enum.each(subscribers, fn pid ->
+      ref = Map.fetch!(data.monitors, pid)
+      send(pid, ref, :message, properties)
+    end)
+
+    data
+  end
+
+  defp handle_pubsub_msg(data, ["pmessage", pattern, channel, payload]) do
+    subscribers = Map.get(data.subscriptions, {:pattern, pattern}, [])
+    properties = %{channel: channel, pattern: pattern, payload: payload}
+
+    Enum.each(subscribers, fn pid ->
+      ref = Map.fetch!(data.monitors, pid)
+      send(pid, ref, :pmessage, properties)
+    end)
+
+    data
+  end
+
+  # Returns {targets_to_subscribe_to, data}.
+  defp subscribe_pid_to_targets(data, operation, targets, pid) do
+    get_and_update_in(data.subscriptions, fn subscriptions ->
+      Enum.flat_map_reduce(targets, subscriptions, fn target, acc ->
+        target_key = key_for_target(operation, target)
+
+        case acc do
+          %{^target_key => subscribers} ->
+            acc = %{acc | target_key => MapSet.put(subscribers, pid)}
+
+            if MapSet.size(subscribers) == 0 do
+              {[target], acc}
+            else
+              {[], acc}
+            end
+
+          %{} ->
+            {[target], Map.put(acc, target_key, MapSet.new([pid]))}
+        end
+      end)
+    end)
+  end
+
+  # Returns {targets_to_unsubscribe_from, data}.
+  defp unsubscribe_pid_from_targets(data, operation, targets, pid) do
+    get_and_update_in(data.subscriptions, fn subscriptions ->
+      Enum.flat_map_reduce(targets, subscriptions, fn target, acc ->
+        key = key_for_target(operation, target)
+
+        case acc do
+          %{^key => subscribers} ->
+            cond do
+              MapSet.size(subscribers) == 0 ->
+                {[], Map.delete(acc, key)}
+
+              subscribers == MapSet.new([pid]) ->
+                {[target], Map.delete(acc, key)}
+
+              true ->
+                {[], %{acc | key => MapSet.delete(subscribers, pid)}}
+            end
+
+          %{} ->
+            {[], acc}
+        end
+      end)
+    end)
+  end
+
+  defp subscribe(_data, [], []) do
+    :ok
+  end
+
+  defp subscribe(data, channels, patterns) do
+    pipeline =
+      case {channels, patterns} do
+        {channels, []} -> [["SUBSCRIBE" | channels]]
+        {[], patterns} -> [["PSUBSCRIBE" | patterns]]
+        {channels, patterns} -> [["SUBSCRIBE" | channels], ["PSUBSCRIBE" | patterns]]
+      end
+
+    transport_send(data, Enum.map(pipeline, &Protocol.pack/1))
+  end
+
+  defp unsubscribe(_data, [], []) do
+    :ok
+  end
+
+  defp unsubscribe(data, channels, patterns) do
+    pipeline =
+      case {channels, patterns} do
+        {channels, []} -> [["UNSUBSCRIBE" | channels]]
+        {[], patterns} -> [["PUNSUBSCRIBE" | patterns]]
+        {channels, patterns} -> [["UNSUBSCRIBE" | channels], ["PUNSUBSCRIBE" | patterns]]
+      end
+
+    transport_send(data, Enum.map(pipeline, &Protocol.pack/1))
+  end
+
+  defp transport_send(data, bytes) do
+    case data.transport.send(data.socket, bytes) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        :ok = :gen_tcp.close(data.socket)
+        {:error, reason}
+    end
+  end
+
+  defp monitor_new(data, pid) do
+    case data.monitors do
+      %{^pid => ref} ->
+        {data, ref}
+
+      _ ->
+        ref = Process.monitor(pid)
+        data = put_in(data.monitors[pid], ref)
+        {data, ref}
+    end
+  end
+
+  defp demonitor_if_not_subscribed_to_anything(data, pid) do
+    still_subscribed_to_something? =
+      Enum.any?(data.subscriptions, fn {_target, subscribers} -> pid in subscribers end)
+
+    if still_subscribed_to_something? do
+      data
+    else
+      {monitor_ref, data} = pop_in(data.monitors[pid])
+      Process.demonitor(monitor_ref, [:flush])
+      data
+    end
+  end
+
+  defp key_for_target(:subscribe, channel), do: {:channel, channel}
+  defp key_for_target(:unsubscribe, channel), do: {:channel, channel}
+  defp key_for_target(:psubscribe, pattern), do: {:pattern, pattern}
+  defp key_for_target(:punsubscribe, pattern), do: {:pattern, pattern}
+
+  defp setopts(data, socket, opts) do
+    inets_mod(data.transport).setopts(socket, opts)
+  end
+
+  defp inets_mod(:gen_tcp), do: :inet
+  defp inets_mod(:ssl), do: :ssl
+
+  defp next_backoff(data) do
+    backoff_current = data.backoff_current || data.opts[:backoff_initial]
+    backoff_max = data.opts[:backoff_max]
+    next_backoff = round(backoff_current * @backoff_exponent)
+
+    backoff_current =
+      if backoff_max == :infinity do
+        next_backoff
+      else
+        min(next_backoff, backoff_max)
+      end
+
+    {backoff_current, put_in(data.backoff_current, backoff_current)}
+  end
+
+  def disconnect(data, reason) do
+    {next_backoff, data} = next_backoff(data)
+    data = put_in(data.last_disconnect_reason, %ConnectionError{reason: reason})
+    timeout_action = {{:timeout, :reconnect}, next_backoff, nil}
+    {:next_state, :disconnected, data, timeout_action}
+  end
+
+  defp send(pid, ref, kind, properties)
+       when is_reference(ref) and is_atom(kind) and is_map(properties) do
+    send(pid, {:redix_pubsub, self(), ref, kind, properties})
+  end
+
+  defp log(data, action, message) do
     level =
-      state.opts
+      data.opts
       |> Keyword.fetch!(:log)
       |> Keyword.fetch!(action)
 

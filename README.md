@@ -2,7 +2,9 @@
 
 [![Build Status](https://travis-ci.org/whatyouhide/redix_pubsub.svg?branch=master)](https://travis-ci.org/whatyouhide/redix_pubsub)
 
-> Elixir library for Redis Pub/Sub (based on [Redix][redix])
+> Elixir library for Redis Pub/Sub (based on [Redix][redix]).
+
+For basic Redis-related functionality, use [Redix][redix].
 
 ## Installation
 
@@ -14,21 +16,15 @@ defp deps() do
 end
 ```
 
-and add `:redix_pubsub` to your list of applications:
-
-```elixir
-defp application() do
-  [applications: [:logger, :redix_pubsub]]
-end
-```
-
-Then, run `mix deps.get` in your shell to fetch the new dependency.
+Use `mix hex.info redix_pubsub` to find out what the latest version is. Then, run `mix deps.get` in your shell to fetch the new dependency.
 
 ## Usage
 
-Each `Redix.PubSub` process is able to subcribe to/unsubscribe from multiple
-Redis channels, and is able to handle multiple Elixir processes subscribing each
-to different channels.
+A `Redix.PubSub` process holds a connection to Redis and acts as a pub/sub intermediary between the Redis server and Elixir processes. The architecture looks like this:
+
+![Redix.PubSub architecture](https://i.imgur.com/Ev9sSK0.png)
+
+Each `Redix.PubSub` process is able to subcribe to or unsubscribe from multiple Redis channels. One `Redix.PubSub` connection can handle multiple Elixir processes subscribing each to different channels.
 
 A `Redix.PubSub` process can be started via `Redix.PubSub.start_link/2`:
 
@@ -36,29 +32,29 @@ A `Redix.PubSub` process can be started via `Redix.PubSub.start_link/2`:
 {:ok, pubsub} = Redix.PubSub.start_link()
 ```
 
-This process will hold a single TCP connection to Redis. All other communication
-happens via Elixir messages (that simulate a Pub/Sub interaction with the
-`Redix.PubSub` process). Subscribing (to channels and patterns) as well as
-unsubscribing work as *fire-and-forget* operations (casts in `GenServer`-speak)
-that always return `:ok`: the subscription/unsubscription confirmation comes as
-an Elixir message.
+Most communication with the `Redix.PubSub` process happens via Elixir messages (that simulate a Pub/Sub interaction with the pub/sub server).
 
 ```elixir
 {:ok, pubsub} = Redix.PubSub.start_link()
 
 Redix.PubSub.subscribe(pubsub, "my_channel", self())
-#=> :ok
+#=> {:ok, ref}
+```
 
-# Now, messages will be sent to the current process. Let's wait for the
-# subscription confirmation:
+Confirmation of subscriptions is delivered as an Elixir message:
+
+```elixir
 receive do
-  {:redix_pubsub, ^pubsub, :subscribed, %{channel: "my_channel"}} -> :ok
+  {:redix_pubsub, ^pubsub, ^ref, :subscribed, %{channel: "my_channel"}} -> :ok
 end
+```
 
-# Now, someone publishes "hello" on "my_channel":
+If someone publishes a message on a channel we're subscribed to:
+
+```elixir
 receive do
-  {:redix_pubsub, ^pubsub, :message, %{channel: "my_channel", payload: "hello"}} ->
-    IO.puts "Received a message!"
+  {:redix_pubsub, ^pubsub, ^ref, :message, %{channel: "my_channel", payload: "hello"}} ->
+    IO.puts("Received a message!")
 end
 ```
 
@@ -67,7 +63,6 @@ More information on usage of this library can be found in the [documentation][do
 ## License
 
 ISC 2016, Andrea Leopardi (see [LICENSE.txt](LICENSE.txt))
-
 
 [docs]: http://hexdocs.pm/redix_pubsub
 [redix]: https://github.com/whatyouhide/redix

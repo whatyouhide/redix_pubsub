@@ -1,8 +1,8 @@
 defmodule Redix.PubSub do
   @moduledoc """
-  Interface for the Redis PubSub functionality.
+  Interface for the Redis pub/sub functionality.
 
-  The rest of this documentation will assume the reader knows how PubSub works
+  The rest of this documentation will assume the reader knows how pub/sub works
   in Redis and knows the meaning of the following Redis commands:
 
     * `SUBSCRIBE` and `UNSUBSCRIBE`
@@ -12,106 +12,121 @@ defmodule Redix.PubSub do
   ## Usage
 
   Each `Redix.PubSub` process is able to subcribe to/unsubscribe from multiple
-  Redis channels, and is able to handle multiple Elixir processes subscribing
-  each to different channels.
+  Redis channels/patterns, and is able to handle multiple Elixir processes subscribing
+  each to different channels/patterns.
 
   A `Redix.PubSub` process can be started via `Redix.PubSub.start_link/2`; such
   a process holds a single TCP connection to the Redis server.
 
-  `Redix.PubSub` has a message-oriented API: all subscribe/unsubscribe
-  operations are *fire-and-forget* operations (casts in `GenServer`-speak) that
-  always return `:ok` to the caller, whether the operation has been processed by
-  `Redix.PubSub` or not. When `Redix.PubSub` registers the
-  subscription/unsubscription, it will send a confirmation message to the
-  subscribed/unsubscribed process. For example:
+  `Redix.PubSub` has a message-oriented API. Subscribe operations are synchronous and return
+  a reference that can then be used to match on all messages sent by the `Redix.PubSub` process.
+
+  When `Redix.PubSub` registers a subscriptions, the subscriber process will receive a
+  confirmation message:
 
       {:ok, pubsub} = Redix.PubSub.start_link()
-      Redix.PubSub.subscribe(pubsub, "my_channel", self())
-      #=> :ok
-      receive do msg -> msg end
-      #=> {:redix_pubsub, #PID<...>, :subscribed, %{channel: "my_channel"}}
+      {:ok, ref} = Redix.PubSub.subscribe(pubsub, "my_channel", self())
+
+      receive do message -> message end
+      #=> {:redix_pubsub, ^pubsub, ^ref, :subscribed, %{channel: "my_channel"}}
 
   After a subscription, messages published to a channel are delivered to all
   Elixir processes subscribed to that channel via `Redix.PubSub`:
 
       # Someone publishes "hello" on "my_channel"
-      receive do msg -> msg end
-      #=> {:redix_pubsub, #PID<...>, :message, %{channel: "my_channel", payload: "hello"}}
+      receive do message -> message end
+      #=> {:redix_pubsub, ^pubsub, ^ref, :message, %{channel: "my_channel", payload: "hello"}}
+
+  Messages are also delivered as a confirmation of an unsubscription as well as when the
+  `Redix.PubSub` connection goes down. See the "Messages" section below.
+
+  ## Messages
+
+  Most of the communication with a PubSub connection is done via (Elixir) messages: the
+  subscribers of these messages will be the processes specified at subscription time (in
+  `subscribe/3` or `psubscribe/3`). All `Redix.PubSub` messages have the same form: they're a
+  five-element tuple that looks like this:
+
+      {:redix_pubsub, pubsub_pid, subscription_ref, message_type, message_properties}
+
+  where:
+
+    * `pubsub_pid` is the pid of the `Redix.PubSub` process that sent this message.
+
+    * `subscription_ref` is the reference returned by `subscribe/3` or `psubscribe/3`.
+
+    * `message_type` is the type of this message, such as `:subscribed` for subscription
+      confirmations, `:message` for pub/sub messages, and so on.
+
+    * `message_properties` is a map of data related to that that varies based on `message_type`.
+
+  Given this format, it's easy to match on all Redix pub/sub messages for a subscription
+  as `{:redix_pubsub, _, ^subscription_ref, _, _}`.
+
+  ### List of possible message types and properties
+
+  The following is a comprehensive list of possible message types alongside the properties
+  that each can have.
+
+    * `:subscribe` - sent as confirmation of subscription to a channel (via `subscribe/3` or
+      after a disconnection and reconnection). One `:subscribe` message is received for every
+      channel a process subscribed to. `:subscribe` messages have the following properties:
+
+        * `:channel` - the channel the process has been subscribed to.
+
+    * `:psubscribe` - sent as confirmation of subscription to a pattern (via `psubscribe/3` or
+      after a disconnection and reconnection). One `:psubscribe` message is received for every
+      pattern a process subscribed to. `:psubscribe` messages have the following properties:
+
+        * `:pattern` - the pattern the process has been subscribed to.
+
+    * `:unsubscribe` - sent as confirmation of unsubscription from a channel (via
+      `unsubscribe/3`). `:unsubscribe` messages are received for every channel a
+      process unsubscribes from. `:unsubscribe` messages havethe following properties:
+
+        * `:channel` - the channel the process has unsubscribed from.
+
+    * `:punsubscribe` - sent as confirmation of unsubscription from a pattern (via
+      `unsubscribe/3`). `:unsubscribe` messages are received for every pattern a
+      process unsubscribes from. `:unsubscribe` messages havethe following properties:
+
+        * `:pattern` - the pattern the process has unsubscribed from.
+
+    * `:message` - sent to subscribers to a given channel when a message is published on
+      that channel. `:message` messages have the following properties:
+
+        * `:channel` - the channel the message was published on
+        * `:payload` - the contents of the message
+
+    * `:pmessage` - sent to subscribers to a given pattern when a message is published on
+      a channel that matches that pattern. `:pmessage` messages have the following properties:
+
+        * `:channel` - the channel the message was published on
+        * `:pattern` - the original pattern that matched the channel
+        * `:payload` - the contents of the message
+
+    * `:disconnected` messages - sent to all subscribers to all channels/patterns when the
+      connection to Redis is interrupted. `:disconnected` messages have the following properties:
+
+        * `:error` - the reason for the disconnection, a `Redix.ConnectionError`
+          exception struct (that can be raised or turned into a message through
+          `Exception.message/1`).
 
   ## Reconnections
 
   `Redix.PubSub` tries to be resilient to failures: when the connection with
   Redis is interrupted (for whatever reason), it will try to reconnect to the
   Redis server. When a disconnection happens, `Redix.PubSub` will notify all
-  clients subscribed to all channels with a `{:redix_pubsub, pid, :disconnected,
-  _}` message (more on the format of messages below). When the connection goes
+  clients subscribed to all channels with a `{:redix_pubsub, pid, subscription_ref, :disconnected,
+  _}` message (more on the format of messages above). When the connection goes
   back up, `Redix.PubSub` takes care of actually re-subscribing to the
   appropriate channels on the Redis server and subscribers are notified with a
-  `{:redix_pubsub, pid, :subscribed, _}` message, the same as when a client
-  subscribes to a channel/pattern.
+  `{:redix_pubsub, pid, subscription_ref, :subscribed | :psubscribed, _}` message, the same as
+  when a client subscribes to a channel/pattern.
 
   Note that if `exit_on_disconnection: true` is passed to
   `Redix.PubSub.start_link/2`, the `Redix.PubSub` process will exit and not send
   any `:disconnected` messages to subscribed clients.
-
-  ## Message format
-
-  Most of the communication with a PubSub connection is done via (Elixir)
-  messages: the subscribers of these messages will be the processes specified at
-  subscription time (in `Redix.PubSub.subscribe/3` or `Redix.PubSub.psubscribe/3`).
-  All `Redix.PubSub` messages have the same form: they're a four-element tuple
-  that looks like this:
-
-      {:redix_pubsub, pid, type, properties}
-
-  where:
-
-    * `pid` is the pid of the `Redix.PubSub` process that sent this message
-    * `type` is the type of this message (e.g., `:subscribed` for subscription
-      confirmations, `:message` for PubSub messages)
-    * `properties` is a map of data related to that that varies based on `type`
-
-  Given this format, it's easy to match on all Redix PubSub messages by just
-  matching on `{:redix_pubsub, ^pid, _, _}`.
-
-  #### List of possible message types and properties
-
-  The following is a list of possible message types alongside the properties
-  that each can have.
-
-    * `:subscribe` or `:psubscribe` messages - they're sent as confirmation of
-      subscription to a channel or pattern (respectively) (via
-      `Redix.PubSub.subscribe/3` or `Redix.PubSub.psubscribe/3` or after a
-      disconnection and reconnection). One `:subscribe`/`:psubscribe` message is
-      received for every channel a process subscribed
-      to. `:subscribe`/`:psubscribe` messages have the following properties:
-        * `:channel` or `:pattern` - the channel/pattern the process has been
-          subscribed to
-    * `:unsubscribe` or `:punsubscribe` messages - they're sent as confirmation
-      of unsubscription to a channel or pattern (respectively) (via
-      `Redix.PubSub.unsubscribe/3` or `Redix.PubSub.punsubscribe/3`). One
-      `:unsubscribe`/`:punsubscribe` message is received for every channel a
-      process unsubscribes from. `:unsubscribe`/`:punsubscribe` messages have
-      the following properties:
-        * `:channel` or `:pattern` - the channel/pattern the process has
-          unsubscribed from
-    * `:message` messages - they're sent to subscribers to a given channel when
-      a message is published on that channel. `:message` messages have the
-      following properties:
-        * `:channel` - the channel this message was published on
-        * `:payload` - the contents of this message
-    * `:pmessage` messages - they're sent to subscribers to a given pattern when
-      a message is published on a channel that matches that pattern. `:pmessage`
-      messages have the following properties:
-        * `:channel` - the channel this message was published on
-        * `:pattern` - the original pattern that matched the channel
-        * `:payload` - the contents of this message
-    * `:disconnected` messages - they're sent to all subscribers to all
-      channels/patterns when the connection to Redis is interrupted.
-      `:disconnected` messages have the following properties:
-        * `:error` - the reason for the disconnection, a `Redix.ConnectionError`
-          exception struct (that can be raised or turned into a message through
-          `Exception.message/1`.
 
   ## Examples
 
@@ -123,17 +138,17 @@ defmodule Redix.PubSub do
       {:ok, client} = Redix.start_link()
 
       Redix.PubSub.subscribe(pubsub, "my_channel", self())
-      #=> :ok
+      #=> {:ok, ref}
 
       # We wait for the subscription confirmation
       receive do
-        {:redix_pubsub, ^pubsub, :subscribed, %{channel: "my_channel"}} -> :ok
+        {:redix_pubsub, ^pubsub, ^ref, :subscribed, %{channel: "my_channel"}} -> :ok
       end
 
       Redix.command!(client, ~w(PUBLISH my_channel hello)
 
       receive do
-        {:redix_pubsub, ^pubsub, :message, %{channel: "my_channel"} = properties} ->
+        {:redix_pubsub, ^pubsub, ^ref, :message, %{channel: "my_channel"} = properties} ->
           properties.payload
       end
       #=> "hello"
@@ -143,34 +158,30 @@ defmodule Redix.PubSub do
 
       # We wait for the unsubscription confirmation
       receive do
-        {:redix_pubsub, ^pubsub, :unsubscribed, _} -> :ok
+        {:redix_pubsub, ^pubsub, ^ref, :unsubscribed, _} -> :ok
       end
 
   """
 
-  @type subscriber :: pid | port | atom | {atom, node}
+  @type subscriber() :: pid() | port() | atom() | {atom(), node()}
+  @type connection() :: :gen_statem.server_ref()
 
   alias Redix.Utils
 
   @doc """
-  Starts a PubSub connection to Redis.
+  Starts a pub/sub connection to Redis.
 
   This function returns `{:ok, pid}` if the PubSub process is started successfully.
 
-  The actual TCP connection to the Redis server may happen either synchronously,
+  The actual TCP/SSL connection to the Redis server may happen either synchronously,
   before `start_link/2` returns, or asynchronously: this behaviour is decided by
   the `:sync_connect` option (see below).
 
-  This function accepts two arguments: the options to connect to the Redis
-  server (like host, port, and so on) and the options to manage the connection
-  and the resiliency. The Redis options can be specified as a keyword list or as
-  a URI.
+  This function accepts one argument, either a Redis URI as a string or a list of options.
 
-  ## Redis options
+  ## Redis URI
 
-  ### URI
-
-  In case `uri_or_redis_opts` is a Redis URI, it must be in the form:
+  In case `uri_or_opts` is a Redis URI, it must be in the form:
 
       redis://[:password@]host[:port][/db]
 
@@ -190,52 +201,55 @@ defmodule Redix.PubSub do
   (password, port, database) are optional and their default value can be found
   in the "Options" section below.
 
-  ### Options
+  ## Options
 
   The following options can be used to specify the parameters used to connect to
   Redis (instead of a URI as described above):
 
     * `:host` - (string) the host where the Redis server is running. Defaults to
       `"localhost"`.
+
     * `:port` - (integer) the port on which the Redis server is
       running. Defaults to `6379`.
+
     * `:password` - (string) the password used to connect to Redis. Defaults to
       `nil`, meaning no password is used. When this option is provided, all Redix
       does is issue an `AUTH` command to Redis in order to authenticate.
+
     * `:database` - (integer or string) the database to connect to. Defaults to
       `nil`, meaning don't connect to any database (Redis connects to database
       `0` by default). When this option is provided, all Redix does is issue a
       `SELECT` command to Redis in order to select the given database.
-
-  ## Connection options
-
-  `connection_opts` is a list of options used to manage the connection. These
-  are the Redix-specific options that can be used:
 
     * `:socket_opts` - (list of options) this option specifies a list of options
       that are passed to `:gen_tcp.connect/4` when connecting to the Redis
       server. Some socket options (like `:active` or `:binary`) will be
       overridden by `Redix.PubSub` so that it functions properly. Defaults to
       `[]`.
+
     * `:sync_connect` - (boolean) decides whether Redix should initiate the TCP
       connection to the Redis server *before* or *after* returning from
       `start_link/2`. This option also changes some reconnection semantics; read
       the ["Reconnections" page](http://hexdocs.pm/redix/reconnections.html) in
       the docs for `Redix` for more information.
+
     * `:backoff_initial` - (integer) the initial backoff time (in milliseconds),
       which is the time that will be waited by the `Redix.PubSub` process before
       attempting to reconnect to Redis after a disconnection or failed first
       connection. See the ["Reconnections"
       page](http://hexdocs.pm/redix/reconnections.html) in the docs for `Redix`
       for more information.
+
     * `:backoff_max` - (integer) the maximum length (in milliseconds) of the
       time interval used between reconnection attempts. See the ["Reconnections"
       page](http://hexdocs.pm/redix/reconnections.html) in the docs for `Redix`
       for more information.
+
     * `:exit_on_disconnection` - (boolean) if `true`, the Redix server will exit
       if it fails to connect or disconnects from Redis. Note that setting this
       option to `true` means that the `:backoff_initial` and `:backoff_max` options
       will be ignored. Defaults to `false`.
+
     * `:log` - (keyword list) a keyword list of `{action, level}` where `level` is
       the log level to use to log `action`. The possible actions and their default
       values are:
@@ -246,14 +260,12 @@ defmodule Redix.PubSub do
         * `:reconnection` (defaults to `:info`) - logged when Redix manages to
           reconnect to Redis after the connection was lost
 
-  In addition to these options, all options accepted by
-  `Connection.start_link/3` (and thus `GenServer.start_link/3`) are forwarded to
-  it. For example, a `Redix.PubSub` process can be registered with a name by using the
-  `:name` option:
+    * `:name` - Redix is bound to the same registration rules as a `GenServer`. See the
+      `GenServer` documentation for more information.
 
-      Redix.PubSub.start_link([], name: :redix_pubsub)
-      Process.whereis(:redix_pubsub)
-      #=> #PID<...>
+    * `:ssl` - (boolean) if `true`, connect through SSL, otherwise through TCP. The
+      `:socket_opts` option applies to both SSL and TCP, so it can be used for things
+      like certificates. See `:ssl.connect/4`. Defaults to `false`.
 
   ## Examples
 
@@ -267,22 +279,77 @@ defmodule Redix.PubSub do
       {:ok, #PID<...>}
 
   """
-  @spec start_link(binary | Keyword.t(), Keyword.t()) :: GenServer.on_start()
-  def start_link(uri_or_redis_opts \\ [], connection_opts \\ [])
+  @spec start_link(String.t() | keyword()) :: :gen_statem.start_ret()
+  def start_link(uri_or_opts \\ [])
 
-  def start_link(uri, other_opts) when is_binary(uri) and is_list(other_opts) do
-    uri |> Redix.URI.opts_from_uri() |> start_link(other_opts)
+  def start_link(uri) when is_binary(uri) do
+    uri |> Redix.URI.opts_from_uri() |> start_link()
   end
 
-  def start_link(redis_opts, other_opts) do
-    {redix_opts, connection_opts} = Utils.sanitize_starting_opts(redis_opts, other_opts)
-    Connection.start_link(Redix.PubSub.Connection, redix_opts, connection_opts)
+  def start_link(opts) when is_list(opts) do
+    opts = Utils.sanitize_starting_opts(opts)
+
+    case Keyword.pop(opts, :name) do
+      {nil, opts} ->
+        :gen_statem.start_link(Redix.PubSub.Connection, opts, [])
+
+      {atom, opts} when is_atom(atom) ->
+        :gen_statem.start_link({:local, atom}, Redix.PubSub.Connection, opts, [])
+
+      {{:global, _term} = tuple, opts} ->
+        :gen_statem.start_link(tuple, Redix.PubSub.Connection, opts, [])
+
+      {{:via, via_module, _term} = tuple, opts} when is_atom(via_module) ->
+        :gen_statem.start_link(tuple, Redix.PubSub.Connection, opts, [])
+
+      {other, _opts} ->
+        raise ArgumentError, """
+        expected :name option to be one of the following:
+
+          * nil
+          * atom
+          * {:global, term}
+          * {:via, module, term}
+
+        Got: #{inspect(other)}
+        """
+    end
   end
 
   @doc """
-  Stops the given PubSub process.
+  Same as `start_link/1` but using both a Redis URI and a list of options.
 
-  This function is synchronous and blocks until the given PubSub connection
+  In this case, options specified in `opts` have precedence over values specified by `uri`.
+  For example, if `uri` is `redix://example1.com` but `opts` is `[host: "example2.com"]`, then
+  `example2.com` will be used as the host when connecting.
+  """
+  @spec start_link(String.t(), keyword()) :: :gen_statem.start_ret()
+  def start_link(uri, opts) when is_binary(uri) and is_list(opts) do
+    uri |> Redix.URI.opts_from_uri() |> Keyword.merge(opts) |> start_link()
+  end
+
+  # TODO: Remove on redix_pubsub 0.6.
+  def start_link(redis_opts, connection_opts)
+      when is_list(redis_opts) and is_list(connection_opts) do
+    IO.warn("""
+    start_link/2 with two lists of options as arguments is deprecated. Options can now be
+    passed as a single list, but you can still pass a Redis URI and a list of options.
+    These are all valid:
+
+        start_link()
+        start_link(host: "redis.example.com", name: :redix)
+        start_link("redis://redis.example.com", name: :redix)
+
+    start_link/2 with two lists of options is going to be removed in the next Redix version.
+    """)
+
+    start_link(Keyword.merge(redis_opts, connection_opts))
+  end
+
+  @doc """
+  Stops the given pub/sub process.
+
+  This function is synchronous and blocks until the given pub/sub connection
   frees all its resources and disconnects from the Redis server. `timeout` can
   be passed to limit the amount of time allowed for the connection to exit; if
   it doesn't exit in the given interval, this call exits.
@@ -293,9 +360,9 @@ defmodule Redix.PubSub do
       :ok
 
   """
-  @spec stop(GenServer.server()) :: :ok
+  @spec stop(connection()) :: :ok
   def stop(conn, timeout \\ :infinity) do
-    GenServer.stop(conn, :normal, timeout)
+    :gen_statem.stop(conn, :normal, timeout)
   end
 
   @doc """
@@ -307,7 +374,7 @@ defmodule Redix.PubSub do
   For each of the channels in `channels` which `subscriber` successfully
   subscribes to, a message will be sent to `subscriber` with this form:
 
-      {:redix_pubsub, pid, :subscribed, %{channel: channel}}
+      {:redix_pubsub, pid, subscription_ref, :subscribed, %{channel: channel}}
 
   See the documentation for `Redix.PubSub` for more information about the format
   of messages.
@@ -315,16 +382,16 @@ defmodule Redix.PubSub do
   ## Examples
 
       iex> Redix.subscribe(conn, ["foo", "bar"], self())
-      :ok
+      {:ok, subscription_ref}
       iex> flush()
-      {:redix_pubsub, #PID<...>, :subscribed, %{channel: "foo"}}
-      {:redix_pubsub, #PID<...>, :subscribed, %{channel: "bar"}}
+      {:redix_pubsub, ^conn, ^subscription_ref, :subscribed, %{channel: "foo"}}
+      {:redix_pubsub, ^conn, ^subscription_ref, :subscribed, %{channel: "bar"}}
       :ok
 
   """
-  @spec subscribe(GenServer.server(), String.t() | [String.t()], subscriber) :: :ok
-  def subscribe(conn, channels, subscriber) do
-    Connection.cast(conn, {:subscribe, List.wrap(channels), subscriber})
+  @spec subscribe(connection(), String.t() | [String.t()], subscriber) :: {:ok, reference()}
+  def subscribe(conn, channels, subscriber \\ self()) do
+    :gen_statem.call(conn, {:subscribe, List.wrap(channels), subscriber})
   end
 
   @doc """
@@ -336,7 +403,7 @@ defmodule Redix.PubSub do
   Upon successful subscription to each of the `patterns`, a message will be sent
   to `subscriber` with the following form:
 
-      {:redix_pubsub, pid, :psubscribed, %{pattern: pattern}}
+      {:redix_pubsub, pid, ^subscription_ref, :psubscribed, %{pattern: pattern}}
 
   See the documentation for `Redix.PubSub` for more information about the format
   of messages.
@@ -346,13 +413,13 @@ defmodule Redix.PubSub do
       iex> Redix.psubscribe(conn, "ba*", self())
       :ok
       iex> flush()
-      {:redix_pubsub, #PID<...>, :psubscribe, %{pattern: "ba*"}}
+      {:redix_pubsub, ^conn, ^subscription_ref, :psubscribe, %{pattern: "ba*"}}
       :ok
 
   """
-  @spec psubscribe(GenServer.server(), String.t() | [String.t()], subscriber) :: :ok
-  def psubscribe(conn, patterns, subscriber) do
-    Connection.cast(conn, {:psubscribe, List.wrap(patterns), subscriber})
+  @spec psubscribe(connection(), String.t() | [String.t()], subscriber) :: {:ok, reference}
+  def psubscribe(conn, patterns, subscriber \\ self()) do
+    :gen_statem.call(conn, {:psubscribe, List.wrap(patterns), subscriber})
   end
 
   @doc """
@@ -364,7 +431,7 @@ defmodule Redix.PubSub do
   Upon successful unsubscription from each of the `channels`, a message will be
   sent to `subscriber` with the following form:
 
-      {:redix_pubsub, pid, :unsubscribed, %{channel: channel}}
+      {:redix_pubsub, pid, ^subscription_ref, :unsubscribed, %{channel: channel}}
 
   See the documentation for `Redix.PubSub` for more information about the format
   of messages.
@@ -374,14 +441,14 @@ defmodule Redix.PubSub do
       iex> Redix.unsubscribe(conn, ["foo", "bar"], self())
       :ok
       iex> flush()
-      {:redix_pubsub, #PID<...>, :unsubscribed, %{channel: "foo"}}
-      {:redix_pubsub, #PID<...>, :unsubscribed, %{channel: "bar"}}
+      {:redix_pubsub, ^conn, ^subscription_ref, :unsubscribed, %{channel: "foo"}}
+      {:redix_pubsub, ^conn, ^subscription_ref, :unsubscribed, %{channel: "bar"}}
       :ok
 
   """
-  @spec unsubscribe(GenServer.server(), String.t() | [String.t()], subscriber) :: :ok
-  def unsubscribe(conn, channels, subscriber) do
-    Connection.cast(conn, {:unsubscribe, List.wrap(channels), subscriber})
+  @spec unsubscribe(connection(), String.t() | [String.t()], subscriber) :: :ok
+  def unsubscribe(conn, channels, subscriber \\ self()) do
+    :gen_statem.call(conn, {:unsubscribe, List.wrap(channels), subscriber})
   end
 
   @doc """
@@ -393,7 +460,7 @@ defmodule Redix.PubSub do
   Upon successful unsubscription from each of the `patterns`, a message will be
   sent to `subscriber` with the following form:
 
-      {:redix_pubsub, pid, :punsubscribed, %{pattern: pattern}}
+      {:redix_pubsub, pid, ^subscription_ref, :punsubscribed, %{pattern: pattern}}
 
   See the documentation for `Redix.PubSub` for more information about the format
   of messages.
@@ -403,12 +470,12 @@ defmodule Redix.PubSub do
       iex> Redix.punsubscribe(conn, "foo_*", self())
       :ok
       iex> flush()
-      {:redix_pubsub, #PID<...>, :punsubscribed, %{pattern: "foo_*"}}
+      {:redix_pubsub, ^conn, ^subscription_ref, :punsubscribed, %{pattern: "foo_*"}}
       :ok
 
   """
-  @spec punsubscribe(GenServer.server(), String.t() | [String.t()], subscriber) :: :ok
-  def punsubscribe(conn, patterns, subscriber) do
-    Connection.cast(conn, {:punsubscribe, List.wrap(patterns), subscriber})
+  @spec punsubscribe(connection(), String.t() | [String.t()], subscriber) :: :ok
+  def punsubscribe(conn, patterns, subscriber \\ self()) do
+    :gen_statem.call(conn, {:punsubscribe, List.wrap(patterns), subscriber})
   end
 end

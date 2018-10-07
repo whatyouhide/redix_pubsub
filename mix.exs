@@ -1,7 +1,7 @@
 defmodule RedixPubsub.Mixfile do
   use Mix.Project
 
-  @version "0.4.2"
+  @version "0.5.0-dev"
 
   def project() do
     [
@@ -11,11 +11,7 @@ defmodule RedixPubsub.Mixfile do
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      package: [
-        maintainers: ["Andrea Leopardi"],
-        licenses: ["MIT"],
-        links: %{"GitHub" => "https://github.com/whatyouhide/redix_pubsub"}
-      ],
+      package: package(),
       description: "Elixir library for using Redis Pub/Sub features (built on top of Redix)",
       name: "Redix.PubSub",
       docs: [
@@ -31,10 +27,17 @@ defmodule RedixPubsub.Mixfile do
     [extra_applications: [:logger]]
   end
 
+  defp package() do
+    [
+      maintainers: ["Andrea Leopardi"],
+      licenses: ["MIT"],
+      links: %{"GitHub" => "https://github.com/whatyouhide/redix_pubsub"}
+    ]
+  end
+
   defp deps() do
     [
-      {:connection, "~> 1.0"},
-      {:redix, "~> 0.6.0"},
+      {:redix, "~> 0.8"},
       {:ex_doc, "~> 0.19", only: :dev}
     ]
   end
