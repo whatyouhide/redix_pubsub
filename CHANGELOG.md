@@ -6,6 +6,7 @@
 
 - Bump the Elixir version to ~> 1.6.
 - Bump the Redix version to ~> 0.8.
+- Require Erlang/OTP 20+.
 - Change message format to always include a subscription reference (returned by `Redix.PubSub.subscribe/3` or `Redix.PubSub.psubscribe/3`) as the third element. The format is now `{:redix_pubsub, pubsub_pid, subscription_ref, message_type, message_properties}`. Change your code accordingly or it won't
 match on pub/sub messages anymore. See the documentation for `Redix.PubSub` for detailed information on the message format.
 - Change the return value of `Redix.PubSub.subscribe/3` and `Redix.PubSub.psubscribe/3` to be `{:ok, subscription_ref}`.

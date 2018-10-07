@@ -16,7 +16,7 @@ defp deps() do
 end
 ```
 
-Use `mix hex.info redix_pubsub` to find out what the latest version is. Then, run `mix deps.get` in your shell to fetch the new dependency.
+Use `mix hex.info redix_pubsub` to find out what the latest version is. Then, run `mix deps.get` in your shell to fetch the new dependency. Note that this library requires Erlang 20+.
 
 ## Usage
 
